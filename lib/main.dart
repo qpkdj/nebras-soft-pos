@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:path/path.dart' as p;
@@ -21,6 +22,18 @@ class DatabaseHelper {
     if (_database != null) return _database!;
     _database = await _initDB('nebras_soft_pos.db');
     return _database!;
+  }
+
+  Future<String> getDatabaseFilePath() async {
+    final dbPath = await getDatabasesPath();
+    return p.join(dbPath, 'nebras_soft_pos.db');
+  }
+
+  Future<void> closeDatabase() async {
+    if (_database != null && _database!.isOpen) {
+      await _database!.close();
+      _database = null;
+    }
   }
 
   Future<Database> _initDB(String filePath) async {
@@ -418,6 +431,46 @@ class DatabaseHelper {
 
     return invoiceNumber;
   }
+
+  Future> getFinancialSummary() async {
+    final db = await instance.database;
+
+    final salesRows = await db.rawQuery(
+      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'sale'",
+    );
+    final purchasesRows = await db.rawQuery(
+      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'purchase'",
+    );
+    final cogsRows = await db.rawQuery('''
+      SELECT COALESCE(SUM(ii.quantity * p.purchase_price), 0) AS cost
+      FROM invoice_items ii
+      INNER JOIN invoices inv ON inv.id = ii.invoice_id
+      LEFT JOIN products p ON p.id = ii.product_id
+      WHERE inv.type = 'sale'
+    ''');
+    final recentInvoices = await db.query(
+      'invoices',
+      orderBy: 'id DESC',
+      limit: 15,
+    );
+    final lowStockProducts = await db.rawQuery(
+      'SELECT * FROM products WHERE is_active = 1 AND stock_quantity <= min_stock ORDER BY stock_quantity ASC',
+    );
+
+    final totalSales = (salesRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    final totalPurchases = (purchasesRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    final totalCogs = (cogsRows.first['cost'] as num?)?.toDouble() ?? 0.0;
+    final grossProfit = totalSales - totalCogs;
+
+    return {
+      'totalSales': totalSales,
+      'totalPurchases': totalPurchases,
+      'totalCogs': totalCogs,
+      'grossProfit': grossProfit,
+      'recentInvoices': recentInvoices,
+      'lowStockProducts': lowStockProducts,
+    };
+  }
 }
 
 class NebrasPosApp extends StatelessWidget {
@@ -499,33 +552,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _onModuleTap(String moduleName) async {
+    Widget? targetScreen;
     if (moduleName == 'إدارة الأصناف') {
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const ProductsScreen()),
-      );
-      _refreshStats();
-      return;
+      targetScreen = const ProductsScreen();
+    } else if (moduleName == 'نقطة البيع (POS)') {
+      targetScreen = const PosScreen();
+    } else if (moduleName == 'فواتير المشتريات') {
+      targetScreen = const PurchasesScreen();
+    } else if (moduleName == 'العملاء والموردين') {
+      targetScreen = const ContactsScreen();
+    } else if (moduleName == 'التقارير والأرباح') {
+      targetScreen = const ReportsScreen();
+    } else if (moduleName == 'النسخ الاحتياطي') {
+      targetScreen = const BackupScreen();
     }
 
-    if (moduleName == 'نقطة البيع (POS)') {
+    if (targetScreen != null) {
       await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const PosScreen()),
-      );
-      _refreshStats();
-      return;
-    }
-
-    if (moduleName == 'فواتير المشتريات') {
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const PurchasesScreen()),
-      );
-      _refreshStats();
-      return;
-    }
-
-    if (moduleName == 'العملاء والموردين') {
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const ContactsScreen()),
+        MaterialPageRoute(builder: (_) => targetScreen!),
       );
       _refreshStats();
       return;
@@ -533,7 +577,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('وحدة "$moduleName" جاهزة للبرمجة في المرحلة القادمة'),
+        content: Text('وحدة "$moduleName" جاهزة'),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -632,6 +676,321 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class ReportsScreen extends StatefulWidget {
+  const ReportsScreen({super.key});
+
+  @override
+  State<ReportsScreen> createState() => _ReportsScreenState();
+}
+
+class _ReportsScreenState extends State<ReportsScreen> {
+  bool _loading = true;
+  double _totalSales = 0.0;
+  double _totalPurchases = 0.0;
+  double _grossProfit = 0.0;
+  List<DbRow> _recentInvoices = [];
+  List<DbRow> _lowStock = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReport();
+  }
+
+  Future<void> _loadReport() async {
+    setState(() => _loading = true);
+    final summary = await DatabaseHelper.instance.getFinancialSummary();
+    if (!mounted) return;
+    setState(() {
+      _totalSales = (summary['totalSales'] as num?)?.toDouble() ?? 0.0;
+      _totalPurchases = (summary['totalPurchases'] as num?)?.toDouble() ?? 0.0;
+      _grossProfit = (summary['grossProfit'] as num?)?.toDouble() ?? 0.0;
+      _recentInvoices = (summary['recentInvoices'] as List<DbRow>?) ?? [];
+      _lowStock = (summary['lowStockProducts'] as List<DbRow>?) ?? [];
+      _loading = false;
+    });
+  }
+
+  Widget _buildStatCard(String title, double value, Color color) {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(color: Colors.black54, fontSize: 13)),
+            const SizedBox(height: 6),
+            Text(
+              value.toStringAsFixed(2),
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'التقارير والأرباح',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFFDC2626),
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            onPressed: _loadReport,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadReport,
+              child: ListView(
+                padding: const EdgeInsets.all(12),
+                children: [
+                  GridView.count(
+                    crossAxisCount: 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                    childAspectRatio: 1.55,
+                    children: [
+                      _buildStatCard('إجمالي المبيعات', _totalSales, const Color(0xFF1545B5)),
+                      _buildStatCard('إجمالي المشتريات', _totalPurchases, const Color(0xFFD97706)),
+                      _buildStatCard(
+                        'صافي الربح التقديري',
+                        _grossProfit,
+                        _grossProfit >= 0 ? const Color(0xFF0D7C66) : Colors.red,
+                      ),
+                      _buildStatCard('أصناف النواقص', _lowStock.length.toDouble(), Colors.redAccent),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'آخر الفواتير المسجلة',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_recentInvoices.isEmpty)
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text('لا توجد فواتير مسجلة حتى الآن'),
+                      ),
+                    )
+                  else
+                    ..._recentInvoices.map((inv) {
+                      final isSale = inv['type'] == 'sale';
+                      final method = inv['payment_method']?.toString() ?? '';
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: (isSale ? Colors.blue : Colors.orange).withAlpha(25),
+                            child: Icon(
+                              isSale ? Icons.arrow_upward : Icons.arrow_downward,
+                              color: isSale ? const Color(0xFF1545B5) : const Color(0xFFD97706),
+                            ),
+                          ),
+                          title: Text(
+                            '${inv['invoice_number']} (${isSale ? 'بيع' : 'شراء'})',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: Text('الدفع: $method • ${inv['date'].toString().split('T').first}'),
+                          trailing: Text(
+                            '${((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
+                        ),
+                      );
+                    }),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class BackupScreen extends StatefulWidget {
+  const BackupScreen({super.key});
+
+  @override
+  State<BackupScreen> createState() => _BackupScreenState();
+}
+
+class _BackupScreenState extends State<BackupScreen> {
+  String _dbPath = '';
+  int _dbSizeBytes = 0;
+  List<FileSystemEntity> _backups = [];
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBackupInfo();
+  }
+
+  Future<Directory> _getBackupDir() async {
+    final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+    final dir = Directory(p.join(p.dirname(dbPath), 'nebras_backups'));
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  Future<void> _loadBackupInfo() async {
+    final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+    final dbFile = File(dbPath);
+    final size = await dbFile.exists() ? await dbFile.length() : 0;
+    final backupDir = await _getBackupDir();
+    final files = await backupDir.list().toList();
+    files.sort((a, b) => b.path.compareTo(a.path));
+
+    if (!mounted) return;
+    setState(() {
+      _dbPath = dbPath;
+      _dbSizeBytes = size;
+      _backups = files;
+    });
+  }
+
+  Future<void> _createBackup() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await DatabaseHelper.instance.database;
+      final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+      final dbFile = File(dbPath);
+      if (!await dbFile.exists()) return;
+
+      final backupDir = await _getBackupDir();
+      final stamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+      final destPath = p.join(backupDir.path, 'nebras_backup_$stamp.db');
+      await dbFile.copy(destPath);
+      await _loadBackupInfo();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إنشاء نسخة احتياطية محلية بنجاح')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _restoreBackup(File backupFile) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await DatabaseHelper.instance.closeDatabase();
+      final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+      await backupFile.copy(dbPath);
+      await DatabaseHelper.instance.database;
+      await _loadBackupInfo();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تمت استعادة النسخة الاحتياطية بنجاح')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sizeKb = (_dbSizeBytes / 1024).toStringAsFixed(1);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'النسخ الاحتياطي',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF334155),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(14),
+        children: [
+          Card(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'حالة قاعدة البيانات المحلية',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('الحجم الحالي: $sizeKb KB'),
+                  const SizedBox(height: 4),
+                  Text(
+                    'المسار: $_dbPath',
+                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _createBackup,
+                      icon: const Icon(Icons.backup),
+                      label: Text(_busy ? 'جاري التنفيذ...' : 'إنشاء نسخة احتياطية الآن'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'النسخ الاحتياطية المحفوظة',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+          ),
+          const SizedBox(height: 8),
+          if (_backups.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(14),
+                child: Text('لا توجد نسخ احتياطية محفوظة بعد'),
+              ),
+            )
+          else
+            ..._backups.map((entity) {
+              final name = p.basename(entity.path);
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: const Icon(Icons.storage, color: Color(0xFF334155)),
+                  title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                  trailing: TextButton(
+                    onPressed: _busy ? null : () => _restoreBackup(File(entity.path)),
+                    child: const Text('استعادة'),
+                  ),
+                ),
+              );
+            }),
+        ],
       ),
     );
   }
