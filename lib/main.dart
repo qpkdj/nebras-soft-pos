@@ -153,6 +153,8 @@ class DatabaseHelper {
     ''');
 
     await db.insert('settings', {'key': 'shop_name', 'value': 'نبراس SofT لنقاط البيع'});
+    await db.insert('settings', {'key': 'shop_phone', 'value': ''});
+    await db.insert('settings', {'key': 'shop_address', 'value': ''});
     await db.insert('settings', {'key': 'currency_name', 'value': 'YER'});
     await db.insert('settings', {'key': 'currency_symbol', 'value': 'ر.ي'});
     await db.insert('settings', {'key': 'tax_percentage', 'value': '0'});
@@ -167,6 +169,40 @@ class DatabaseHelper {
       await db.execute('ALTER TABLE contacts ADD COLUMN credit_limit REAL NOT NULL DEFAULT 0.0');
       await db.execute('ALTER TABLE contacts ADD COLUMN due_days INTEGER NOT NULL DEFAULT 30');
     }
+  }
+
+  Future getSettingsMap() async {
+    final db = await instance.database;
+    final rows = await db.query('settings');
+    final map = <String, String>{
+      'shop_name': 'نبراس SofT لنقاط البيع',
+      'shop_phone': '',
+      'shop_address': '',
+      'currency_name': 'YER',
+      'currency_symbol': 'ر.ي',
+      'tax_percentage': '0',
+    };
+    for (final r in rows) {
+      final k = r['key']?.toString();
+      final v = r['value']?.toString() ?? '';
+      if (k != null && k.isNotEmpty) {
+        map[k] = v;
+      }
+    }
+    return map;
+  }
+
+  Future saveSettingsMap(Map<String, String> values) async {
+    final db = await instance.database;
+    await db.transaction((txn) async {
+      for (final entry in values.entries) {
+        await txn.insert(
+          'settings',
+          {'key': entry.key, 'value': entry.value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
   }
 
   Future<int> insertProduct(DbRow row) async {
@@ -512,6 +548,7 @@ class ThermalPdfService {
   static Future<Uint8List> buildReceiptPdf({
     required DbRow invoice,
     required List<DbRow> items,
+    required Map<String, String> settings,
     bool is80mm = true,
   }) async {
     final fontRegular = await PdfGoogleFonts.cairoRegular();
@@ -526,6 +563,11 @@ class ThermalPdfService {
 
     final pageFormat = is80mm ? PdfPageFormat.roll80 : PdfPageFormat.roll57;
     final bool isSale = invoice['type'] == 'sale';
+    final String shopName = (settings['shop_name'] ?? 'نبراس SofT لنقاط البيع').trim();
+    final String shopPhone = (settings['shop_phone'] ?? '').trim();
+    final String shopAddress = (settings['shop_address'] ?? '').trim();
+    final String currency = (settings['currency_symbol'] ?? 'ر.ي').trim();
+
     final String invNum = (invoice['invoice_number'] ?? '').toString();
     final String rawDate = (invoice['date'] ?? '').toString();
     final String formattedDate = rawDate.replaceFirst('T', ' ').split('.').first;
@@ -546,16 +588,29 @@ class ThermalPdfService {
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
                 pw.Text(
-                  'Nebras SofT Pos',
+                  shopName.isEmpty ? 'Nebras SofT Pos' : shopName,
                   textAlign: pw.TextAlign.center,
-                  style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+                  style: pw.TextStyle(fontSize: 13.5, fontWeight: pw.FontWeight.bold),
                 ),
+                if (shopPhone.isNotEmpty)
+                  pw.Text(
+                    'هاتف: $shopPhone',
+                    textAlign: pw.TextAlign.center,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                if (shopAddress.isNotEmpty)
+                  pw.Text(
+                    shopAddress,
+                    textAlign: pw.TextAlign.center,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                pw.SizedBox(height: 3),
                 pw.Text(
                   isSale ? 'فاتورة مبيعات' : 'فاتورة مشتريات',
                   textAlign: pw.TextAlign.center,
-                  style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
+                  style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold),
                 ),
-                pw.SizedBox(height: 6),
+                pw.SizedBox(height: 4),
                 pw.Divider(thickness: 0.8),
                 pw.Text('رقم الفاتورة: $invNum', style: const pw.TextStyle(fontSize: 8.5)),
                 pw.Text('التاريخ: $formattedDate', style: const pw.TextStyle(fontSize: 8.5)),
@@ -646,14 +701,20 @@ class ThermalPdfService {
                     mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                     children: [
                       pw.Text('الإجمالي قبل الخصم:', style: const pw.TextStyle(fontSize: 8.5)),
-                      pw.Text(subTotal.toStringAsFixed(2), style: const pw.TextStyle(fontSize: 8.5)),
+                      pw.Text(
+                        '${subTotal.toStringAsFixed(2)} $currency',
+                        style: const pw.TextStyle(fontSize: 8.5),
+                      ),
                     ],
                   ),
                   pw.Row(
                     mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                     children: [
                       pw.Text('الخصم:', style: const pw.TextStyle(fontSize: 8.5)),
-                      pw.Text(discount.toStringAsFixed(2), style: const pw.TextStyle(fontSize: 8.5)),
+                      pw.Text(
+                        '${discount.toStringAsFixed(2)} $currency',
+                        style: const pw.TextStyle(fontSize: 8.5),
+                      ),
                     ],
                   ),
                 ],
@@ -665,7 +726,7 @@ class ThermalPdfService {
                       style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
                     ),
                     pw.Text(
-                      netTotal.toStringAsFixed(2),
+                      '${netTotal.toStringAsFixed(2)} $currency',
                       style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
                     ),
                   ],
@@ -695,9 +756,15 @@ class ThermalPdfService {
     final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
     if (details.isEmpty) return;
 
+    final settings = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
     final inv = details['invoice'] as DbRow;
     final items = (details['items'] as List<DbRow>?) ?? [];
-    final bytes = await buildReceiptPdf(invoice: inv, items: items, is80mm: is80mm);
+    final bytes = await buildReceiptPdf(
+      invoice: inv,
+      items: items,
+      settings: settings,
+      is80mm: is80mm,
+    );
 
     await Printing.layoutPdf(
       name: '$invoiceNumber.pdf',
@@ -713,9 +780,15 @@ class ThermalPdfService {
     final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
     if (details.isEmpty) return;
 
+    final settings = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
     final inv = details['invoice'] as DbRow;
     final items = (details['items'] as List<DbRow>?) ?? [];
-    final bytes = await buildReceiptPdf(invoice: inv, items: items, is80mm: is80mm);
+    final bytes = await buildReceiptPdf(
+      invoice: inv,
+      items: items,
+      settings: settings,
+      is80mm: is80mm,
+    );
 
     await Printing.sharePdf(
       bytes: bytes,
@@ -834,6 +907,8 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   int _productsCount = 0;
+  String _shopName = 'نبراس SofT لنقاط البيع';
+  String _currencySymbol = 'ر.ي';
   bool _dbReady = false;
 
   static const List<_ModuleItem> _modules = [
@@ -843,6 +918,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _ModuleItem('العملاء والموردين', Icons.people, Color(0xFF7C3AED)),
     _ModuleItem('التقارير والأرباح', Icons.bar_chart, Color(0xFFDC2626)),
     _ModuleItem('النسخ الاحتياطي', Icons.settings_backup_restore, Color(0xFF334155)),
+    _ModuleItem('الإعدادات', Icons.settings, Color(0xFF0369A1)),
   ];
 
   @override
@@ -854,9 +930,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _refreshStats() async {
     try {
       final products = await DatabaseHelper.instance.queryAllProducts();
+      final settings = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
       if (!mounted) return;
       setState(() {
         _productsCount = products.length;
+        _shopName = settings['shop_name'] ?? 'نبراس SofT لنقاط البيع';
+        _currencySymbol = settings['currency_symbol'] ?? 'ر.ي';
         _dbReady = true;
       });
     } catch (_) {
@@ -881,6 +960,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       targetScreen = const ReportsScreen();
     } else if (moduleName == 'النسخ الاحتياطي') {
       targetScreen = const BackupScreen();
+    } else if (moduleName == 'الإعدادات') {
+      targetScreen = const SettingsScreen();
     }
 
     if (targetScreen != null) {
@@ -920,14 +1001,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'نظام نقاط البيع والمحاسبة الذكي',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  Text(
+                    _shopName,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     _dbReady
-                        ? 'قاعدة البيانات متصلة • عدد الأصناف: $_productsCount'
+                        ? 'الأصناف: $_productsCount • العملة: $_currencySymbol'
                         : 'جاري تهيئة قاعدة البيانات...',
                     style: const TextStyle(
                       color: Colors.white,
@@ -985,6 +1066,177 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  final TextEditingController _shopNameCtrl = TextEditingController();
+  final TextEditingController _shopPhoneCtrl = TextEditingController();
+  final TextEditingController _shopAddressCtrl = TextEditingController();
+  final TextEditingController _currencySymbolCtrl = TextEditingController();
+  final TextEditingController _taxCtrl = TextEditingController();
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    _shopNameCtrl.dispose();
+    _shopPhoneCtrl.dispose();
+    _shopAddressCtrl.dispose();
+    _currencySymbolCtrl.dispose();
+    _taxCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSettings() async {
+    final map = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
+    if (!mounted) return;
+    _shopNameCtrl.text = map['shop_name'] ?? 'نبراس SofT لنقاط البيع';
+    _shopPhoneCtrl.text = map['shop_phone'] ?? '';
+    _shopAddressCtrl.text = map['shop_address'] ?? '';
+    _currencySymbolCtrl.text = map['currency_symbol'] ?? 'ر.ي';
+    _taxCtrl.text = map['tax_percentage'] ?? '0';
+    setState(() => _loading = false);
+  }
+
+  Future<void> _saveSettings() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await DatabaseHelper.instance.saveSettingsMap({
+        'shop_name': _shopNameCtrl.text.trim().isEmpty
+            ? 'نبراس SofT لنقاط البيع'
+            : _shopNameCtrl.text.trim(),
+        'shop_phone': _shopPhoneCtrl.text.trim(),
+        'shop_address': _shopAddressCtrl.text.trim(),
+        'currency_symbol': _currencySymbolCtrl.text.trim().isEmpty
+            ? 'ر.ي'
+            : _currencySymbolCtrl.text.trim(),
+        'tax_percentage': _taxCtrl.text.trim().isEmpty ? '0' : _taxCtrl.text.trim(),
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ إعدادات المحل والعملة بنجاح')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'إعدادات المحل والعملة',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF0369A1),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(14),
+              children: [
+                Card(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          'بيانات الفاتورة والطباعة',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _shopNameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'اسم المحل / المنشأة',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _shopPhoneCtrl,
+                          keyboardType: TextInputType.phone,
+                          decoration: const InputDecoration(
+                            labelText: 'رقم الهاتف (يظهر في الفاتورة)',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _shopAddressCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'العنوان (يظهر في الفاتورة)',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          'العملة والضريبة',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _currencySymbolCtrl,
+                                decoration: const InputDecoration(
+                                  labelText: 'رمز العملة (مثلاً: ر.ي)',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextField(
+                                controller: _taxCtrl,
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                decoration: const InputDecoration(
+                                  labelText: 'نسبة الضريبة %',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          height: 48,
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF0369A1),
+                            ),
+                            onPressed: _saving ? null : _saveSettings,
+                            icon: const Icon(Icons.save),
+                            label: Text(_saving ? 'جاري الحفظ...' : 'حفظ الإعدادات'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -1516,7 +1768,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 TextField(
                   controller: balanceCtrl,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          decoration: InputDecoration(
+                  decoration: InputDecoration(
                     labelText: isCustomer ? 'الرصيد الحالي (مديونية العميل)' : 'الرصيد الحالي (مستحق للمورد)',
                     border: const OutlineInputBorder(),
                   ),
