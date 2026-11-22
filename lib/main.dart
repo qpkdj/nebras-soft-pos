@@ -167,6 +167,25 @@ class DatabaseHelper {
     );
   }
 
+  Future<List<DbRow>> querySuppliers() async {
+    final db = await instance.database;
+    return await db.query(
+      'contacts',
+      where: "type = 'supplier'",
+      orderBy: 'name ASC',
+    );
+  }
+
+  Future<int> insertSupplier(String name, {String? phone}) async {
+    final db = await instance.database;
+    return await db.insert('contacts', {
+      'name': name,
+      'phone': phone,
+      'type': 'supplier',
+      'balance': 0.0,
+    });
+  }
+
   Future<String> createSaleInvoice({
     required List<DbRow> cartItems,
     required double totalAmount,
@@ -212,6 +231,85 @@ class DatabaseHelper {
           where: 'id = ?',
           whereArgs: [productId],
         );
+      }
+    });
+
+    return invoiceNumber;
+  }
+
+  Future<String> createPurchaseInvoice({
+    required List<DbRow> purchaseItems,
+    required double totalAmount,
+    required double discount,
+    required double paidAmount,
+    required String paymentMethod,
+    int? supplierId,
+  }) async {
+    final db = await instance.database;
+    final now = DateTime.now();
+    final invoiceNumber = 'PUR-${now.millisecondsSinceEpoch}';
+    final netTotal = (totalAmount - discount) < 0 ? 0.0 : (totalAmount - discount);
+
+    await db.transaction((txn) async {
+      final invoiceId = await txn.insert('invoices', {
+        'invoice_number': invoiceNumber,
+        'contact_id': supplierId,
+        'type': 'purchase',
+        'date': now.toIso8601String(),
+        'total_amount': netTotal,
+        'discount': discount,
+        'tax': 0.0,
+        'paid_amount': paidAmount,
+        'payment_method': paymentMethod,
+        'user_id': 1,
+      });
+
+      for (final item in purchaseItems) {
+        final int productId = item['product_id'] as int;
+        final double qty = (item['quantity'] as num).toDouble();
+        final double costPrice = (item['price'] as num).toDouble();
+        final double lineTotal = qty * costPrice;
+        final double currentStock = (item['stock_quantity'] as num).toDouble();
+        final double updatedStock = currentStock + qty;
+
+        await txn.insert('invoice_items', {
+          'invoice_id': invoiceId,
+          'product_id': productId,
+          'quantity': qty,
+          'price': costPrice,
+          'total': lineTotal,
+        });
+
+        await txn.update(
+          'products',
+          {
+            'stock_quantity': updatedStock,
+            'purchase_price': costPrice,
+          },
+          where: 'id = ?',
+          whereArgs: [productId],
+        );
+      }
+
+      if (supplierId != null) {
+        final remaining = netTotal - paidAmount;
+        if (remaining > 0) {
+          final rows = await txn.query(
+            'contacts',
+            columns: ['balance'],
+            where: 'id = ?',
+            whereArgs: [supplierId],
+          );
+          if (rows.isNotEmpty) {
+            final oldBalance = (rows.first['balance'] as num?)?.toDouble() ?? 0.0;
+            await txn.update(
+              'contacts',
+              {'balance': oldBalance + remaining},
+              where: 'id = ?',
+              whereArgs: [supplierId],
+            );
+          }
+        }
       }
     });
 
@@ -309,6 +407,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (moduleName == 'نقطة البيع (POS)') {
       await Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const PosScreen()),
+      );
+      _refreshStats();
+      return;
+    }
+
+    if (moduleName == 'فواتير المشتريات') {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PurchasesScreen()),
       );
       _refreshStats();
       return;
@@ -415,6 +521,481 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class PurchasesScreen extends StatefulWidget {
+  const PurchasesScreen({super.key});
+
+  @override
+  State<PurchasesScreen> createState() => _PurchasesScreenState();
+}
+
+class _PurchasesScreenState extends State<PurchasesScreen> {
+  List<DbRow> _products = [];
+  List<DbRow> _suppliers = [];
+  List<DbRow> _items = [];
+  int? _selectedSupplierId;
+  String _paymentMethod = 'نقدي';
+  String _search = '';
+  bool _loading = true;
+  bool _saving = false;
+
+  final TextEditingController _discountController = TextEditingController(text: '0');
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialData();
+  }
+
+  @override
+  void dispose() {
+    _discountController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadInitialData() async {
+    setState(() => _loading = true);
+    final products = await DatabaseHelper.instance.queryAllProducts();
+    final suppliers = await DatabaseHelper.instance.querySuppliers();
+    if (!mounted) return;
+    setState(() {
+      _products = products;
+      _suppliers = suppliers;
+      _loading = false;
+    });
+  }
+
+  List<DbRow> get _filteredProducts {
+    final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return _products;
+    return _products.where((item) {
+      final name = (item['name'] ?? '').toString().toLowerCase();
+      final barcode = (item['barcode'] ?? '').toString().toLowerCase();
+      return name.contains(q) || barcode.contains(q);
+    }).toList();
+  }
+
+  double get _subTotal {
+    double sum = 0.0;
+    for (final item in _items) {
+      final qty = (item['quantity'] as num).toDouble();
+      final price = (item['price'] as num).toDouble();
+      sum += qty * price;
+    }
+    return sum;
+  }
+
+  double get _discount => double.tryParse(_discountController.text.trim()) ?? 0.0;
+
+  double get _netTotal {
+    final net = _subTotal - _discount;
+    return net < 0 ? 0.0 : net;
+  }
+
+  void _addProductToPurchase(DbRow product) {
+    final int productId = product['id'] as int;
+    final double stock = (product['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+    final double purchasePrice = (product['purchase_price'] as num?)?.toDouble() ?? 0.0;
+    final String name = (product['name'] ?? '').toString();
+
+    final index = _items.indexWhere((e) => e['product_id'] == productId);
+    if (index >= 0) {
+      setState(() {
+        _items[index]['quantity'] = (_items[index]['quantity'] as num).toDouble() + 1;
+      });
+    } else {
+      setState(() {
+        _items.add({
+          'product_id': productId,
+          'name': name,
+          'price': purchasePrice,
+          'quantity': 1.0,
+          'stock_quantity': stock,
+        });
+      });
+    }
+  }
+
+  Future<void> _editItemDialog(int index) async {
+    final current = _items[index];
+    final qtyCtrl = TextEditingController(text: current['quantity'].toString());
+    final priceCtrl = TextEditingController(text: current['price'].toString());
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('تعديل "${current['name']}"'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: qtyCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'الكمية المشتراة',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: priceCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'سعر الشراء للوحدة',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('تطبيق'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      final newQty = double.tryParse(qtyCtrl.text.trim()) ?? 0.0;
+      final newPrice = double.tryParse(priceCtrl.text.trim()) ?? 0.0;
+      if (newQty <= 0) {
+        setState(() => _items.removeAt(index));
+      } else {
+        setState(() {
+          _items[index]['quantity'] = newQty;
+          _items[index]['price'] = newPrice < 0 ? 0.0 : newPrice;
+        });
+      }
+    }
+  }
+
+  Future<void> _quickAddSupplier() async {
+    final nameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة مورد جديد'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'اسم المورد *',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'رقم الهاتف (اختياري)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final name = nameCtrl.text.trim();
+              if (name.isEmpty) return;
+              final newId = await DatabaseHelper.instance.insertSupplier(
+                name,
+                phone: phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+              );
+              _selectedSupplierId = newId;
+              if (ctx.mounted) Navigator.of(ctx).pop(true);
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+
+    if (created == true) {
+      final suppliers = await DatabaseHelper.instance.querySuppliers();
+      if (!mounted) return;
+      setState(() => _suppliers = suppliers);
+    }
+  }
+
+  Future<void> _savePurchase() async {
+    if (_items.isEmpty || _saving) return;
+
+    if (_paymentMethod == 'آجل' && _selectedSupplierId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يرجى اختيار مورد عند تسجيل فاتورة مشتريات آجلة')),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final paid = _paymentMethod == 'نقدي' ? _netTotal : 0.0;
+      final purNumber = await DatabaseHelper.instance.createPurchaseInvoice(
+        purchaseItems: _items,
+        totalAmount: _subTotal,
+        discount: _discount,
+        paidAmount: paid,
+        paymentMethod: _paymentMethod,
+        supplierId: _selectedSupplierId,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _items.clear();
+        _discountController.text = '0';
+        _saving = false;
+      });
+      await _loadInitialData();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تم حفظ فاتورة المشتريات $purNumber وتغذية المخزون'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('حدث خطأ أثناء حفظ فاتورة المشتريات')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final products = _filteredProducts;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'فواتير المشتريات',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFFD97706),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<int?>(
+                    value: _selectedSupplierId,
+                    decoration: InputDecoration(
+                      labelText: 'المورد (اختياري للنقدي)',
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('مورد نقدي عام'),
+                      ),
+                      ..._suppliers.map(
+                        (s) => DropdownMenuItem<int?>(
+                          value: s['id'] as int,
+                          child: Text((s['name'] ?? '').toString()),
+                        ),
+                      ),
+                    ],
+                    onChanged: (val) => setState(() => _selectedSupplierId = val),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _quickAddSupplier,
+                  style: IconButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
+                  tooltip: 'إضافة مورد',
+                  icon: const Icon(Icons.person_add_alt_1),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: TextField(
+              onChanged: (val) => setState(() => _search = val),
+              decoration: InputDecoration(
+                hintText: 'اختر صنفاً لإضافته لفاتورة الشراء...',
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 4,
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : products.isEmpty
+                    ? const Center(child: Text('أضف أصنافاً أولاً من شاشة إدارة الأصناف'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        itemCount: products.length,
+                        itemBuilder: (context, index) {
+                          final pRow = products[index];
+                          final qty = (pRow['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+                          final cost = (pRow['purchase_price'] as num?)?.toDouble() ?? 0.0;
+
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            child: ListTile(
+                              dense: true,
+                              onTap: () => _addProductToPurchase(pRow),
+                              title: Text(
+                                (pRow['name'] ?? '').toString(),
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text('المخزون الحالي: $qty • آخر شراء: $cost'),
+                              trailing: const Icon(Icons.add_shopping_cart, color: Color(0xFFD97706)),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            flex: 5,
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'أصناف فاتورة الشراء (اضغط لتعديل السعر/الكمية)',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      Text(
+                        'الصافي: ${_netTotal.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          color: Color(0xFFD97706),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: _items.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'اضغط على أي صنف بالأعلى لإضافته لفاتورة الشراء',
+                              style: TextStyle(color: Colors.black54),
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: _items.length,
+                            itemBuilder: (context, index) {
+                              final item = _items[index];
+                              final qty = (item['quantity'] as num).toDouble();
+                              final price = (item['price'] as num).toDouble();
+                              final total = qty * price;
+
+                              return ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => _editItemDialog(index),
+                                title: Text(
+                                  item['name'].toString(),
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                subtitle: Text('الكمية: $qty × السعر: $price = ${total.toStringAsFixed(2)}'),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                                  onPressed: () => setState(() => _items.removeAt(index)),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _discountController,
+                          onChanged: (_) => setState(() {}),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'الخصم',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: _paymentMethod,
+                          decoration: const InputDecoration(
+                            labelText: 'طريقة الدفع',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 'نقدي', child: Text('نقدي')),
+                            DropdownMenuItem(value: 'آجل', child: Text('آجل')),
+                          ],
+                          onChanged: (val) {
+                            if (val != null) setState(() => _paymentMethod = val);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFD97706),
+                      ),
+                      onPressed: _items.isEmpty || _saving ? null : _savePurchase,
+                      icon: const Icon(Icons.save_alt),
+                      label: Text(_saving ? 'جاري الحفظ...' : 'حفظ فاتورة المشتريات'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
