@@ -41,7 +41,7 @@ jobs:
               p.write_text(txt, encoding="utf-8")
           '
           flutter pub get
-          if [ -f "assets/icon/app_icon.png" ]; then
+          if [ -f "assets/icon/app_icon.png" ] && (grep -q "^flutter_launcher_icons:" pubspec.yaml || [ -f "flutter_launcher_icons.yaml" ]); then
             dart run flutter_launcher_icons
           fi
           flutter build apk --release
