@@ -30,6 +30,16 @@ jobs:
         run: |
           flutter create --org com.nebrassoft --project-name nebras_soft_pos --platforms=android .
           sed -i 's/android:label="[^"]*"/android:label="Nebras SofT Pos"/' android/app/src/main/AndroidManifest.xml
+          python3 -c '
+          from pathlib import Path
+          p = Path("android/settings.gradle.kts")
+          if p.exists():
+              txt = p.read_text(encoding="utf-8")
+              txt = txt.replace("id(\"org.jetbrains.kotlin.android\") version \"2.3.20\"", "id(\"org.jetbrains.kotlin.android\") version \"2.1.0\"")
+              if "mavenCentral()" not in txt:
+                  txt = txt.replace("gradlePluginPortal()", "gradlePluginPortal()\n        mavenCentral()")
+              p.write_text(txt, encoding="utf-8")
+          '
           flutter pub get
           if [ -f "assets/icon/app_icon.png" ]; then
             dart run flutter_launcher_icons
