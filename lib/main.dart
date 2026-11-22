@@ -140,7 +140,7 @@ class DatabaseHelper {
     );
   }
 
-  Future<List>> queryAllProducts() async {
+  Future<List> queryAllProducts() async {
     final db = await instance.database;
     return await db.query('products', where: 'is_active = 1');
   }
