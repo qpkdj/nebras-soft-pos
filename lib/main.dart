@@ -432,7 +432,8 @@ class DatabaseHelper {
     return invoiceNumber;
   }
 
-  Future> getFinancialSummary() async {
+  Future<DbRow> getFinancialSummary() async {
+    
     final db = await instance.database;
 
     final salesRows = await db.rawQuery(
