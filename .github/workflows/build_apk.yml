@@ -14,72 +14,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Fix Assets & Icon Path
+      - name: Setup Android & Build APK
         run: |
-          mkdir -p assets/icon
-          if [ ! -f "assets/icon/app_icon.png" ]; then
-            FOUND_ICON=$(find . -maxdepth 3 \( -iname "app_icon.png" -o -iname "*.png" \) -not -path "./.git/*" -not -path "./android/*" | head -n 1)
-            if [ -n "$FOUND_ICON" ]; then
-              cp "$FOUND_ICON" assets/icon/app_icon.png
-            fi
-          fi
-          touch assets/icon/.keep
-
-      - name: Generate Android Wrapper (Cloud)
-        run: |
-          if [ ! -d "android" ]; then
-            flutter create --org com.nebrassoft --project-name nebras_soft_pos --platforms=android temp_proj
-            cp -r temp_proj/android ./android
-            rm -rf temp_proj
-          fi
+          flutter create --org com.nebrassoft --project-name nebras_soft_pos --platforms=android .
           sed -i 's/android:label="[^"]*"/android:label="Nebras SofT Pos"/' android/app/src/main/AndroidManifest.xml
-
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Apply App Icon
-        run: |
+          flutter pub get
           if [ -f "assets/icon/app_icon.png" ]; then
             dart run flutter_launcher_icons
           fi
+          flutter build apk --release
 
-      - name: Build Release APK
-        run: |
-          set +e
-          flutter build apk --release --no-tree-shake-icons 2>&1 | tee build.log
-          EXIT_CODE=${PIPESTATUS[0]}
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "========== REAL ERROR =========="
-            grep -iE "error:|unable to find|not found|target .* failed|exception" build.log | tail -n 15
-            echo "================================"
-            exit $EXIT_CODE
-          fi
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: Nebras-SofT-Pos-APK
           path: build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Publish to GitHub Releases (on Tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: build/app/outputs/flutter-apk/app-release.apk
           generate_release_notes: true
-
