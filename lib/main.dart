@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:path/path.dart' as p;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:sqflite/sqflite.dart';
 
 typedef DbRow = Map<String, dynamic>;
@@ -148,6 +152,7 @@ class DatabaseHelper {
       )
     ''');
 
+    await db.insert('settings', {'key': 'shop_name', 'value': 'نبراس SofT لنقاط البيع'});
     await db.insert('settings', {'key': 'currency_name', 'value': 'YER'});
     await db.insert('settings', {'key': 'currency_symbol', 'value': 'ر.ي'});
     await db.insert('settings', {'key': 'tax_percentage', 'value': '0'});
@@ -432,8 +437,37 @@ class DatabaseHelper {
     return invoiceNumber;
   }
 
+  Future<DbRow> getInvoiceDetailsByNumber(String invoiceNumber) async {
+    final db = await instance.database;
+    final invRows = await db.rawQuery('''
+      SELECT inv.*, c.name AS contact_name
+      FROM invoices inv
+      LEFT JOIN contacts c ON c.id = inv.contact_id
+      WHERE inv.invoice_number = ?
+      LIMIT 1
+    ''', [invoiceNumber]);
+
+    if (invRows.isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    final inv = invRows.first;
+    final int invId = inv['id'] as int;
+
+    final itemRows = await db.rawQuery('''
+      SELECT ii.*, COALESCE(p.name, 'صنف') AS name
+      FROM invoice_items ii
+      LEFT JOIN products p ON p.id = ii.product_id
+      WHERE ii.invoice_id = ?
+    ''', [invId]);
+
+    return {
+      'invoice': inv,
+      'items': itemRows,
+    };
+  }
+
   Future<DbRow> getFinancialSummary() async {
-    
     final db = await instance.database;
 
     final salesRows = await db.rawQuery(
@@ -452,7 +486,7 @@ class DatabaseHelper {
     final recentInvoices = await db.query(
       'invoices',
       orderBy: 'id DESC',
-      limit: 15,
+      limit: 20,
     );
     final lowStockProducts = await db.rawQuery(
       'SELECT * FROM products WHERE is_active = 1 AND stock_quantity <= min_stock ORDER BY stock_quantity ASC',
@@ -471,6 +505,287 @@ class DatabaseHelper {
       'recentInvoices': recentInvoices,
       'lowStockProducts': lowStockProducts,
     };
+  }
+}
+
+class ThermalPdfService {
+  static Future<Uint8List> buildReceiptPdf({
+    required DbRow invoice,
+    required List<DbRow> items,
+    bool is80mm = true,
+  }) async {
+    final fontRegular = await PdfGoogleFonts.cairoRegular();
+    final fontBold = await PdfGoogleFonts.cairoBold();
+
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: fontRegular,
+        bold: fontBold,
+      ),
+    );
+
+    final pageFormat = is80mm ? PdfPageFormat.roll80 : PdfPageFormat.roll57;
+    final bool isSale = invoice['type'] == 'sale';
+    final String invNum = (invoice['invoice_number'] ?? '').toString();
+    final String rawDate = (invoice['date'] ?? '').toString();
+    final String formattedDate = rawDate.replaceFirst('T', ' ').split('.').first;
+    final String contactName = (invoice['contact_name'] ?? (isSale ? 'عميل نقدي عام' : 'مورد نقدي عام')).toString();
+    final String payMethod = (invoice['payment_method'] ?? 'نقدي').toString();
+    final double netTotal = (invoice['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final double discount = (invoice['discount'] as num?)?.toDouble() ?? 0.0;
+    final double subTotal = netTotal + discount;
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        build: (pw.Context ctx) {
+          return pw.Directionality(
+            textDirection: pw.TextDirection.rtl,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                pw.Text(
+                  'Nebras SofT Pos',
+                  textAlign: pw.TextAlign.center,
+                  style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.Text(
+                  isSale ? 'فاتورة مبيعات' : 'فاتورة مشتريات',
+                  textAlign: pw.TextAlign.center,
+                  style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.SizedBox(height: 6),
+                pw.Divider(thickness: 0.8),
+                pw.Text('رقم الفاتورة: $invNum', style: const pw.TextStyle(fontSize: 8.5)),
+                pw.Text('التاريخ: $formattedDate', style: const pw.TextStyle(fontSize: 8.5)),
+                pw.Text(
+                  '${isSale ? 'العميل' : 'المورد'}: $contactName',
+                  style: const pw.TextStyle(fontSize: 8.5),
+                ),
+                pw.Text('طريقة الدفع: $payMethod', style: const pw.TextStyle(fontSize: 8.5)),
+                pw.Divider(thickness: 0.8),
+                pw.Row(
+                  children: [
+                    pw.Expanded(
+                      flex: 4,
+                      child: pw.Text('الصنف', style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Expanded(
+                      flex: 2,
+                      child: pw.Text(
+                        'الكمية',
+                        textAlign: pw.TextAlign.center,
+                        style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+                      ),
+                    ),
+                    pw.Expanded(
+                      flex: 2,
+                      child: pw.Text(
+                        'السعر',
+                        textAlign: pw.TextAlign.center,
+                        style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+                      ),
+                    ),
+                    pw.Expanded(
+                      flex: 2,
+                      child: pw.Text(
+                        'الإجمالي',
+                        textAlign: pw.TextAlign.left,
+                        style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                pw.Divider(thickness: 0.5),
+                ...items.map((item) {
+                  final name = (item['name'] ?? '').toString();
+                  final qty = (item['quantity'] as num?)?.toDouble() ?? 0.0;
+                  final price = (item['price'] as num?)?.toDouble() ?? 0.0;
+                  final total = (item['total'] as num?)?.toDouble() ?? (qty * price);
+
+                  return pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 2),
+                    child: pw.Row(
+                      children: [
+                        pw.Expanded(
+                          flex: 4,
+                          child: pw.Text(name, style: const pw.TextStyle(fontSize: 8)),
+                        ),
+                        pw.Expanded(
+                          flex: 2,
+                          child: pw.Text(
+                            qty.toString(),
+                            textAlign: pw.TextAlign.center,
+                            style: const pw.TextStyle(fontSize: 8),
+                          ),
+                        ),
+                        pw.Expanded(
+                          flex: 2,
+                          child: pw.Text(
+                            price.toStringAsFixed(1),
+                            textAlign: pw.TextAlign.center,
+                            style: const pw.TextStyle(fontSize: 8),
+                          ),
+                        ),
+                        pw.Expanded(
+                          flex: 2,
+                          child: pw.Text(
+                            total.toStringAsFixed(1),
+                            textAlign: pw.TextAlign.left,
+                            style: const pw.TextStyle(fontSize: 8),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                pw.Divider(thickness: 0.8),
+                if (discount > 0) ...[
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('الإجمالي قبل الخصم:', style: const pw.TextStyle(fontSize: 8.5)),
+                      pw.Text(subTotal.toStringAsFixed(2), style: const pw.TextStyle(fontSize: 8.5)),
+                    ],
+                  ),
+                  pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                    children: [
+                      pw.Text('الخصم:', style: const pw.TextStyle(fontSize: 8.5)),
+                      pw.Text(discount.toStringAsFixed(2), style: const pw.TextStyle(fontSize: 8.5)),
+                    ],
+                  ),
+                ],
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text(
+                      'الصافي المستحق:',
+                      style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
+                    ),
+                    pw.Text(
+                      netTotal.toStringAsFixed(2),
+                      style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
+                    ),
+                  ],
+                ),
+                pw.SizedBox(height: 8),
+                pw.Divider(thickness: 0.5),
+                pw.Text(
+                  'شكراً لتعاملكم معنا • Nebras SofT Pos',
+                  textAlign: pw.TextAlign.center,
+                  style: const pw.TextStyle(fontSize: 8),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    return pdf.save();
+  }
+
+  static Future<void> printThermalInvoice(
+    BuildContext context,
+    String invoiceNumber, {
+    bool is80mm = true,
+  }) async {
+    final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
+    if (details.isEmpty) return;
+
+    final inv = details['invoice'] as DbRow;
+    final items = (details['items'] as List<DbRow>?) ?? [];
+    final bytes = await buildReceiptPdf(invoice: inv, items: items, is80mm: is80mm);
+
+    await Printing.layoutPdf(
+      name: '$invoiceNumber.pdf',
+      onLayout: (_) async => bytes,
+    );
+  }
+
+  static Future<void> shareInvoicePdf(
+    BuildContext context,
+    String invoiceNumber, {
+    bool is80mm = true,
+  }) async {
+    final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
+    if (details.isEmpty) return;
+
+    final inv = details['invoice'] as DbRow;
+    final items = (details['items'] as List<DbRow>?) ?? [];
+    final bytes = await buildReceiptPdf(invoice: inv, items: items, is80mm: is80mm);
+
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: '$invoiceNumber.pdf',
+    );
+  }
+
+  static Future<void> showInvoiceActionSheet(BuildContext context, String invoiceNumber) async {
+    bool is80mm = true;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.receipt_long, size: 40, color: Color(0xFF1545B5)),
+              const SizedBox(height: 8),
+              Text(
+                'فاتورة رقم: $invoiceNumber',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 12),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: true, label: Text('ورق حراري 80mm')),
+                  ButtonSegment(value: false, label: Text('ورق حراري 58mm')),
+                ],
+                selected: {is80mm},
+                onSelectionChanged: (sel) {
+                  setSheetState(() => is80mm = sel.first);
+                },
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        Navigator.of(ctx).pop();
+                        await printThermalInvoice(context, invoiceNumber, is80mm: is80mm);
+                      },
+                      icon: const Icon(Icons.print),
+                      label: const Text('طباعة حرارية / PDF'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.of(ctx).pop();
+                        await shareInvoicePdf(context, invoiceNumber, is80mm: is80mm);
+                      },
+                      icon: const Icon(Icons.share),
+                      label: const Text('مشاركة PDF'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -573,15 +888,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         MaterialPageRoute(builder: (_) => targetScreen!),
       );
       _refreshStats();
-      return;
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('وحدة "$moduleName" جاهزة'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   @override
@@ -785,8 +1092,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                   const SizedBox(height: 14),
                   const Text(
-                    'آخر الفواتير المسجلة',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    'آخر الفواتير المسجلة (اضغط لطباعة أو مشاركة PDF)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                   ),
                   const SizedBox(height: 8),
                   if (_recentInvoices.isEmpty)
@@ -800,9 +1107,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     ..._recentInvoices.map((inv) {
                       final isSale = inv['type'] == 'sale';
                       final method = inv['payment_method']?.toString() ?? '';
+                      final invNum = (inv['invoice_number'] ?? '').toString();
                       return Card(
                         margin: const EdgeInsets.only(bottom: 8),
                         child: ListTile(
+                          onTap: () => ThermalPdfService.showInvoiceActionSheet(context, invNum),
                           leading: CircleAvatar(
                             backgroundColor: (isSale ? Colors.blue : Colors.orange).withAlpha(25),
                             child: Icon(
@@ -811,13 +1120,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
                             ),
                           ),
                           title: Text(
-                            '${inv['invoice_number']} (${isSale ? 'بيع' : 'شراء'})',
+                            '$invNum (${isSale ? 'بيع' : 'شراء'})',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                           subtitle: Text('الدفع: $method • ${inv['date'].toString().split('T').first}'),
-                          trailing: Text(
-                            '${((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.print_outlined, size: 20, color: Colors.black54),
+                            ],
                           ),
                         ),
                       );
@@ -1200,7 +1516,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 TextField(
                   controller: balanceCtrl,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: InputDecoration(
+                          decoration: InputDecoration(
                     labelText: isCustomer ? 'الرصيد الحالي (مديونية العميل)' : 'الرصيد الحالي (مستحق للمورد)',
                     border: const OutlineInputBorder(),
                   ),
@@ -1703,12 +2019,7 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
       });
       await _loadInitialData();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('تم حفظ فاتورة المشتريات $purNumber وتغذية المخزون'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await ThermalPdfService.showInvoiceActionSheet(context, purNumber);
     } catch (_) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -2112,12 +2423,7 @@ class _PosScreenState extends State<PosScreen> {
       });
       await _loadData();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('تم حفظ الفاتورة رقم $invNum وتحديث المخزون والحساب'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await ThermalPdfService.showInvoiceActionSheet(context, invNum);
     } catch (_) {
       if (!mounted) return;
       setState(() => _saving = false);
