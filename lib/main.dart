@@ -1,10 +1,165 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'core/database/database_helper.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NebrasPosApp());
+}
+
+class DatabaseHelper {
+  static final DatabaseHelper instance = DatabaseHelper._init();
+  static Database? _database;
+
+  DatabaseHelper._init();
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDB('nebras_soft_pos.db');
+    return _database!;
+  }
+
+  Future<Database> _initDB(String filePath) async {
+    final dbPath = await getDatabasesPath();
+    final path = p.join(dbPath, filePath);
+
+    return await openDatabase(
+      path,
+      version: 1,
+      onCreate: _createDB,
+    );
+  }
+
+  Future<void> _createDB(Database db, int version) async {
+    const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
+    const textType = 'TEXT NOT NULL';
+    const textNullable = 'TEXT';
+    const intType = 'INTEGER NOT NULL';
+    const doubleType = 'REAL NOT NULL';
+    const doubleDefaultZero = 'REAL NOT NULL DEFAULT 0.0';
+
+    await db.execute('''
+      CREATE TABLE categories (
+        id $idType,
+        name $textType,
+        color $textNullable
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE products (
+        id $idType,
+        barcode $textNullable UNIQUE,
+        name $textType,
+        category_id INTEGER,
+        purchase_price $doubleDefaultZero,
+        sale_price $doubleType,
+        stock_quantity $doubleDefaultZero,
+        min_stock $doubleDefaultZero,
+        image_path $textNullable,
+        is_active $intType DEFAULT 1,
+        FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE SET NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE contacts (
+        id $idType,
+        name $textType,
+        phone $textNullable,
+        type $textType,
+        balance $doubleDefaultZero
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE invoices (
+        id $idType,
+        invoice_number $textType UNIQUE,
+        contact_id INTEGER,
+        type $textType,
+        date $textType,
+        total_amount $doubleType,
+        discount $doubleDefaultZero,
+        tax $doubleDefaultZero,
+        paid_amount $doubleDefaultZero,
+        payment_method $textType,
+        user_id INTEGER,
+        FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE invoice_items (
+        id $idType,
+        invoice_id $intType,
+        product_id $intType,
+        quantity $doubleType,
+        price $doubleType,
+        total $doubleType,
+        FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE CASCADE,
+        FOREIGN KEY (product_id) REFERENCES products (id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE vouchers (
+        id $idType,
+        voucher_number $textType UNIQUE,
+        contact_id INTEGER,
+        type $textType,
+        amount $doubleType,
+        date $textType,
+        notes $textNullable,
+        user_id INTEGER,
+        FOREIGN KEY (contact_id) REFERENCES contacts (id) ON DELETE SET NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE settings (
+        id $idType,
+        key $textType UNIQUE,
+        value $textType
+      )
+    ''');
+
+    await db.insert('settings', {'key': 'currency_name', 'value': 'YER'});
+    await db.insert('settings', {'key': 'currency_symbol', 'value': 'ر.ي'});
+    await db.insert('settings', {'key': 'tax_percentage', 'value': '0'});
+  }
+
+  Future<int> insertProduct(Map<String, dynamic> row) async {
+    final db = await instance.database;
+    return await db.insert(
+      'products',
+      row,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List>> queryAllProducts() async {
+    final db = await instance.database;
+    return await db.query('products', where: 'is_active = 1');
+  }
+
+  Future<int> updateProduct(Map<String, dynamic> row) async {
+    final db = await instance.database;
+    final int id = row['id'] as int;
+    return await db.update('products', row, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<int> deleteProduct(int id) async {
+    final db = await instance.database;
+    return await db.update(
+      'products',
+      {'is_active': 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 }
 
 class NebrasPosApp extends StatelessWidget {
@@ -35,6 +190,14 @@ class NebrasPosApp extends StatelessWidget {
   }
 }
 
+class _ModuleItem {
+  final String title;
+  final IconData icon;
+  final Color color;
+
+  const _ModuleItem(this.title, this.icon, this.color);
+}
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -46,6 +209,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _productsCount = 0;
   bool _dbReady = false;
 
+  static const List<_ModuleItem> _modules = [
+    _ModuleItem('نقطة البيع (POS)', Icons.point_of_sale, Color(0xFF1545B5)),
+    _ModuleItem('إدارة الأصناف', Icons.inventory_2, Color(0xFF0D7C66)),
+    _ModuleItem('فواتير المشتريات', Icons.shopping_cart, Color(0xFFD97706)),
+    _ModuleItem('العملاء والموردين', Icons.people, Color(0xFF7C3AED)),
+    _ModuleItem('التقارير والأرباح', Icons.bar_chart, Color(0xFFDC2626)),
+    _ModuleItem('النسخ الاحتياطي', Icons.settings_backup_restore, Color(0xFF334155)),
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -53,12 +225,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _initDatabase() async {
-    final products = await DatabaseHelper.instance.queryAllProducts();
-    if (!mounted) return;
-    setState(() {
-      _productsCount = products.length;
-      _dbReady = true;
-    });
+    try {
+      final products = await DatabaseHelper.instance.queryAllProducts();
+      if (!mounted) return;
+      setState(() {
+        _productsCount = products.length;
+        _dbReady = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _dbReady = true;
+      });
+    }
   }
 
   void _showComingSoon(String moduleName) {
@@ -72,15 +251,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final modules = [
-      ('نقطة البيع (POS)', Icons.point_of_sale, const Color(0xFF1545B5)),
-      ('إدارة الأصناف', Icons.inventory_2, const Color(0xFF0D7C66)),
-      ('فواتير المشتريات', Icons.shopping_cart, const Color(0xFFD97706)),
-      ('العملاء والموردين', Icons.people, const Color(0xFF7C3AED)),
-      ('التقارير والأرباح', Icons.bar_chart, const Color(0xFFDC2626)),
-      ('النسخ الاحتياطي', Icons.settings_backup_restore, const Color(0xFF334155)),
-    ];
-
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -129,7 +299,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 18),
             Expanded(
               child: GridView.builder(
-                itemCount: modules.length,
+                itemCount: _modules.length,
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
                   crossAxisSpacing: 14,
@@ -137,7 +307,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   childAspectRatio: 1.15,
                 ),
                 itemBuilder: (context, index) {
-                  final item = modules[index];
+                  final item = _modules[index];
                   return Card(
                     elevation: 2,
                     shape: RoundedRectangleBorder(
@@ -145,18 +315,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     child: InkWell(
                       borderRadius: BorderRadius.circular(16),
-                      onTap: () => _showComingSoon(item.$1),
+                      onTap: () => _showComingSoon(item.title),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           CircleAvatar(
                             radius: 26,
-                            backgroundColor: item.$3.withAlpha(30),
-                            child: Icon(item.$2, color: item.$3, size: 28),
+                            backgroundColor: item.color.withAlpha(30),
+                            child: Icon(item.icon, color: item.color, size: 28),
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            item.$1,
+                            item.title,
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontWeight: FontWeight.bold,
