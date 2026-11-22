@@ -29,8 +29,9 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: _upgradeDB,
     );
   }
 
@@ -69,9 +70,15 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE contacts (
         id $idType,
+        code $textNullable,
+        barcode $textNullable,
         name $textType,
         phone $textNullable,
+        address $textNullable,
         type $textType,
+        price_tier $textType DEFAULT 'تجزئة',
+        credit_limit $doubleDefaultZero,
+        due_days $intType DEFAULT 30,
         balance $doubleDefaultZero
       )
     ''');
@@ -133,6 +140,17 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'tax_percentage', 'value': '0'});
   }
 
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE contacts ADD COLUMN code TEXT');
+      await db.execute('ALTER TABLE contacts ADD COLUMN barcode TEXT');
+      await db.execute('ALTER TABLE contacts ADD COLUMN address TEXT');
+      await db.execute("ALTER TABLE contacts ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'تجزئة'");
+      await db.execute('ALTER TABLE contacts ADD COLUMN credit_limit REAL NOT NULL DEFAULT 0.0');
+      await db.execute('ALTER TABLE contacts ADD COLUMN due_days INTEGER NOT NULL DEFAULT 30');
+    }
+  }
+
   Future<int> insertProduct(DbRow row) async {
     final db = await instance.database;
     return await db.insert(
@@ -167,18 +185,38 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<DbRow>> querySuppliers() async {
+  Future<List<DbRow>> queryContactsByType(String type) async {
     final db = await instance.database;
     return await db.query(
       'contacts',
-      where: "type = 'supplier'",
-      orderBy: 'name ASC',
+      where: 'type = ?',
+      whereArgs: [type],
+      orderBy: 'id DESC',
     );
   }
 
-  Future<int> insertSupplier(String name, {String? phone}) async {
+  Future<List<DbRow>> querySuppliers() async {
+    return queryContactsByType('supplier');
+  }
+
+  Future<List<DbRow>> queryCustomers() async {
+    return queryContactsByType('customer');
+  }
+
+  Future<int> insertContact(DbRow row) async {
     final db = await instance.database;
-    return await db.insert('contacts', {
+    return await db.insert('contacts', row);
+  }
+
+  Future<int> updateContact(DbRow row) async {
+    final db = await instance.database;
+    final int id = row['id'] as int;
+    return await db.update('contacts', row, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<int> insertSupplier(String name, {String? phone}) async {
+    return insertContact({
+      'code': 'SUP-${DateTime.now().millisecondsSinceEpoch % 100000}',
       'name': name,
       'phone': phone,
       'type': 'supplier',
@@ -186,25 +224,72 @@ class DatabaseHelper {
     });
   }
 
+  Future<String> createVoucher({
+    required int contactId,
+    required String type,
+    required double amount,
+    String? notes,
+  }) async {
+    final db = await instance.database;
+    final now = DateTime.now();
+    final prefix = type == 'receipt' ? 'RCV' : 'PAY';
+    final voucherNumber = '$prefix-${now.millisecondsSinceEpoch}';
+
+    await db.transaction((txn) async {
+      await txn.insert('vouchers', {
+        'voucher_number': voucherNumber,
+        'contact_id': contactId,
+        'type': type,
+        'amount': amount,
+        'date': now.toIso8601String(),
+        'notes': notes,
+        'user_id': 1,
+      });
+
+      final rows = await txn.query(
+        'contacts',
+        columns: ['balance'],
+        where: 'id = ?',
+        whereArgs: [contactId],
+      );
+      if (rows.isNotEmpty) {
+        final oldBalance = (rows.first['balance'] as num?)?.toDouble() ?? 0.0;
+        final nextBalance = (oldBalance - amount) < 0 ? 0.0 : (oldBalance - amount);
+        await txn.update(
+          'contacts',
+          {'balance': nextBalance},
+          where: 'id = ?',
+          whereArgs: [contactId],
+        );
+      }
+    });
+
+    return voucherNumber;
+  }
+
   Future<String> createSaleInvoice({
     required List<DbRow> cartItems,
     required double totalAmount,
+    double discount = 0.0,
     String paymentMethod = 'نقدي',
+    int? customerId,
   }) async {
     final db = await instance.database;
     final now = DateTime.now();
     final invoiceNumber = 'INV-${now.millisecondsSinceEpoch}';
+    final netTotal = (totalAmount - discount) < 0 ? 0.0 : (totalAmount - discount);
+    final paidAmount = paymentMethod == 'نقدي' ? netTotal : 0.0;
 
     await db.transaction((txn) async {
       final invoiceId = await txn.insert('invoices', {
         'invoice_number': invoiceNumber,
-        'contact_id': null,
+        'contact_id': customerId,
         'type': 'sale',
         'date': now.toIso8601String(),
-        'total_amount': totalAmount,
-        'discount': 0.0,
+        'total_amount': netTotal,
+        'discount': discount,
         'tax': 0.0,
-        'paid_amount': totalAmount,
+        'paid_amount': paidAmount,
         'payment_method': paymentMethod,
         'user_id': 1,
       });
@@ -231,6 +316,24 @@ class DatabaseHelper {
           where: 'id = ?',
           whereArgs: [productId],
         );
+      }
+
+      if (customerId != null && paymentMethod == 'آجل' && netTotal > 0) {
+        final rows = await txn.query(
+          'contacts',
+          columns: ['balance'],
+          where: 'id = ?',
+          whereArgs: [customerId],
+        );
+        if (rows.isNotEmpty) {
+          final oldBalance = (rows.first['balance'] as num?)?.toDouble() ?? 0.0;
+          await txn.update(
+            'contacts',
+            {'balance': oldBalance + netTotal},
+            where: 'id = ?',
+            whereArgs: [customerId],
+          );
+        }
       }
     });
 
@@ -420,6 +523,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
+    if (moduleName == 'العملاء والموردين') {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ContactsScreen()),
+      );
+      _refreshStats();
+      return;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('وحدة "$moduleName" جاهزة للبرمجة في المرحلة القادمة'),
@@ -521,6 +632,472 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class ContactsScreen extends StatefulWidget {
+  const ContactsScreen({super.key});
+
+  @override
+  State<ContactsScreen> createState() => _ContactsScreenState();
+}
+
+class _ContactsScreenState extends State<ContactsScreen> {
+  String _activeType = 'customer';
+  List<DbRow> _contacts = [];
+  String _search = '';
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContacts();
+  }
+
+  Future<void> _loadContacts() async {
+    setState(() => _loading = true);
+    final rows = await DatabaseHelper.instance.queryContactsByType(_activeType);
+    if (!mounted) return;
+    setState(() {
+      _contacts = rows;
+      _loading = false;
+    });
+  }
+
+  List<DbRow> get _filteredContacts {
+    final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return _contacts;
+    return _contacts.where((c) {
+      final name = (c['name'] ?? '').toString().toLowerCase();
+      final phone = (c['phone'] ?? '').toString().toLowerCase();
+      final code = (c['code'] ?? '').toString().toLowerCase();
+      final barcode = (c['barcode'] ?? '').toString().toLowerCase();
+      return name.contains(q) || phone.contains(q) || code.contains(q) || barcode.contains(q);
+    }).toList();
+  }
+
+  String _generateContactBarcode() {
+    final prefix = _activeType == 'customer' ? '100' : '300';
+    return '$prefix${DateTime.now().millisecondsSinceEpoch % 1000000000}';
+  }
+
+  Future<void> _openContactDialog({DbRow? existing}) async {
+    final isEdit = existing != null;
+    final isCustomer = _activeType == 'customer';
+    final defaultCode = isCustomer
+        ? 'CUS-${DateTime.now().millisecondsSinceEpoch % 100000}'
+        : 'SUP-${DateTime.now().millisecondsSinceEpoch % 100000}';
+
+    final codeCtrl = TextEditingController(
+      text: existing?['code']?.toString() ?? defaultCode,
+    );
+    final nameCtrl = TextEditingController(
+      text: existing?['name']?.toString() ?? '',
+    );
+    final barcodeCtrl = TextEditingController(
+      text: existing?['barcode']?.toString() ?? '',
+    );
+    final phoneCtrl = TextEditingController(
+      text: existing?['phone']?.toString() ?? '',
+    );
+    final addressCtrl = TextEditingController(
+      text: existing?['address']?.toString() ?? '',
+    );
+    final limitCtrl = TextEditingController(
+      text: (existing?['credit_limit'] ?? 0).toString(),
+    );
+    final dueDaysCtrl = TextEditingController(
+      text: (existing?['due_days'] ?? 30).toString(),
+    );
+    final balanceCtrl = TextEditingController(
+      text: (existing?['balance'] ?? 0).toString(),
+    );
+    String priceTier = (existing?['price_tier'] ?? 'تجزئة').toString();
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            isEdit
+                ? (isCustomer ? 'تعديل بيانات العميل' : 'تعديل بيانات المورد')
+                : (isCustomer ? 'إضافة عميل جديد' : 'إضافة مورد جديد'),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: InputDecoration(
+                    labelText: isCustomer ? 'اسم العميل *' : 'اسم المورد *',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: codeCtrl,
+                        decoration: InputDecoration(
+                          labelText: isCustomer ? 'رقم العميل' : 'رقم المورد',
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: phoneCtrl,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'رقم الهاتف',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: barcodeCtrl,
+                        decoration: InputDecoration(
+                          labelText: isCustomer ? 'باركود العميل' : 'باركود المورد',
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      tooltip: 'توليد باركود',
+                      onPressed: () {
+                        barcodeCtrl.text = _generateContactBarcode();
+                      },
+                      icon: const Icon(Icons.qr_code_2, size: 28),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: addressCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'العنوان',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if (isCustomer) ...[
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: priceTier,
+                    decoration: const InputDecoration(
+                      labelText: 'فئة سعر البيع للعميل',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'تجزئة', child: Text('سعر التجزئة')),
+                      DropdownMenuItem(value: 'جملة', child: Text('سعر الجملة')),
+                      DropdownMenuItem(value: 'خاص', child: Text('سعر خاص')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setDialogState(() => priceTier = val);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: limitCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'سقف الآجل',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: dueDaysCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'مهلة السداد (يوم)',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 10),
+                TextField(
+                  controller: balanceCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: isCustomer ? 'الرصيد الحالي (مديونية العميل)' : 'الرصيد الحالي (مستحق للمورد)',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('يرجى إدخال الاسم')),
+                  );
+                  return;
+                }
+
+                final row = <String, dynamic>{
+                  'code': codeCtrl.text.trim().isEmpty ? null : codeCtrl.text.trim(),
+                  'barcode': barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
+                  'name': name,
+                  'phone': phoneCtrl.text.trim().isEmpty ? null : phoneCtrl.text.trim(),
+                  'address': addressCtrl.text.trim().isEmpty ? null : addressCtrl.text.trim(),
+                  'type': _activeType,
+                  'price_tier': priceTier,
+                  'credit_limit': double.tryParse(limitCtrl.text.trim()) ?? 0.0,
+                  'due_days': int.tryParse(dueDaysCtrl.text.trim()) ?? 30,
+                  'balance': double.tryParse(balanceCtrl.text.trim()) ?? 0.0,
+                };
+
+                if (isEdit) {
+                  row['id'] = existing['id'];
+                  await DatabaseHelper.instance.updateContact(row);
+                } else {
+                  await DatabaseHelper.instance.insertContact(row);
+                }
+
+                if (ctx.mounted) Navigator.of(ctx).pop(true);
+              },
+              child: Text(isEdit ? 'تحديث' : 'حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await _loadContacts();
+    }
+  }
+
+  Future<void> _openVoucherDialog(DbRow contact) async {
+    final isCustomer = _activeType == 'customer';
+    final amountCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+
+    final done = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          isCustomer
+              ? 'سند قبض من: ${contact['name']}'
+              : 'سند صرف إلى: ${contact['name']}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('الرصيد الحالي: ${contact['balance']}'),
+            const SizedBox(height: 10),
+            TextField(
+              controller: amountCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'المبلغ المدفوع *',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: notesCtrl,
+              decoration: const InputDecoration(
+                labelText: 'ملاحظات (اختياري)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final amt = double.tryParse(amountCtrl.text.trim()) ?? 0.0;
+              if (amt <= 0) return;
+              await DatabaseHelper.instance.createVoucher(
+                contactId: contact['id'] as int,
+                type: isCustomer ? 'receipt' : 'payment',
+                amount: amt,
+                notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop(true);
+            },
+            child: const Text('تسجيل السند'),
+          ),
+        ],
+      ),
+    );
+
+    if (done == true) {
+      await _loadContacts();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تسجيل السند وتحديث الرصيد بنجاح')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _filteredContacts;
+    final isCustomer = _activeType == 'customer';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'العملاء والموردين',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF7C3AED),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openContactDialog(),
+        backgroundColor: const Color(0xFF7C3AED),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.person_add),
+        label: Text(isCustomer ? 'عميل جديد' : 'مورد جديد'),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            child: SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'customer',
+                  label: Text('العملاء'),
+                  icon: Icon(Icons.person_outline),
+                ),
+                ButtonSegment(
+                  value: 'supplier',
+                  label: Text('الموردون'),
+                  icon: Icon(Icons.local_shipping_outlined),
+                ),
+              ],
+              selected: {_activeType},
+              onSelectionChanged: (sel) {
+                setState(() => _activeType = sel.first);
+                _loadContacts();
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: TextField(
+              onChanged: (val) => setState(() => _search = val),
+              decoration: InputDecoration(
+                hintText: 'ابحث بالاسم أو الهاتف أو الباركود أو الرقم...',
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : list.isEmpty
+                    ? Center(
+                        child: Text(
+                          isCustomer
+                              ? 'لا يوجد عملاء مسجلون بعد، اضغط "عميل جديد"'
+                              : 'لا يوجد موردون مسجلون بعد، اضغط "مورد جديد"',
+                          style: const TextStyle(color: Colors.black54),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 84),
+                        itemCount: list.length,
+                        itemBuilder: (context, index) {
+                          final c = list[index];
+                          final balance = (c['balance'] as num?)?.toDouble() ?? 0.0;
+                          final limit = (c['credit_limit'] as num?)?.toDouble() ?? 0.0;
+                          final overLimit = isCustomer && limit > 0 && balance >= limit;
+                          final phone = c['phone']?.toString() ?? '';
+                          final code = c['code']?.toString() ?? '';
+
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: ListTile(
+                              onTap: () => _openContactDialog(existing: c),
+                              title: Text(
+                                '${c['name']} ${code.isNotEmpty ? '($code)' : ''}',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text(
+                                'الرصيد: ${balance.toStringAsFixed(2)}'
+                                '${phone.isNotEmpty ? ' • هاتف: $phone' : ''}'
+                                '${isCustomer && limit > 0 ? ' • سقف الآجل: $limit' : ''}',
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (overLimit)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red.withAlpha(25),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Text(
+                                        'تجاوز الحد',
+                                        style: TextStyle(
+                                          color: Colors.red,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  IconButton(
+                                    tooltip: isCustomer ? 'سند قبض' : 'سند صرف',
+                                    icon: const Icon(Icons.payments_outlined, color: Color(0xFF7C3AED)),
+                                    onPressed: () => _openVoucherDialog(c),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
       ),
     );
   }
@@ -1010,23 +1587,36 @@ class PosScreen extends StatefulWidget {
 
 class _PosScreenState extends State<PosScreen> {
   List<DbRow> _products = [];
+  List<DbRow> _customers = [];
   List<DbRow> _cart = [];
+  int? _selectedCustomerId;
+  String _paymentMethod = 'نقدي';
   String _search = '';
   bool _loading = true;
   bool _saving = false;
 
+  final TextEditingController _discountController = TextEditingController(text: '0');
+
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    _loadData();
   }
 
-  Future<void> _loadProducts() async {
+  @override
+  void dispose() {
+    _discountController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadData() async {
     setState(() => _loading = true);
     final rows = await DatabaseHelper.instance.queryAllProducts();
+    final customers = await DatabaseHelper.instance.queryCustomers();
     if (!mounted) return;
     setState(() {
       _products = rows;
+      _customers = customers;
       _loading = false;
     });
   }
@@ -1041,7 +1631,7 @@ class _PosScreenState extends State<PosScreen> {
     }).toList();
   }
 
-  double get _cartTotal {
+  double get _subTotal {
     double sum = 0.0;
     for (final item in _cart) {
       final qty = (item['quantity'] as num).toDouble();
@@ -1049,6 +1639,13 @@ class _PosScreenState extends State<PosScreen> {
       sum += qty * price;
     }
     return sum;
+  }
+
+  double get _discount => double.tryParse(_discountController.text.trim()) ?? 0.0;
+
+  double get _netTotal {
+    final net = _subTotal - _discount;
+    return net < 0 ? 0.0 : net;
   }
 
   void _addToCart(DbRow product) {
@@ -1110,23 +1707,54 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _checkout() async {
     if (_cart.isEmpty || _saving) return;
+
+    if (_paymentMethod == 'آجل') {
+      if (_selectedCustomerId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('يرجى اختيار عميل مسجل عند البيع الآجل')),
+        );
+        return;
+      }
+
+      final customer = _customers.firstWhere(
+        (c) => c['id'] == _selectedCustomerId,
+        orElse: () => <String, dynamic>{},
+      );
+      final limit = (customer['credit_limit'] as num?)?.toDouble() ?? 0.0;
+      final balance = (customer['balance'] as num?)?.toDouble() ?? 0.0;
+      if (limit > 0 && (balance + _netTotal) > limit) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'تنبيه: الفاتورة ستتجاوز سقف الآجل للعميل ($limit) — رصيده الحالي $balance',
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
     setState(() => _saving = true);
 
     try {
       final invNum = await DatabaseHelper.instance.createSaleInvoice(
         cartItems: _cart,
-        totalAmount: _cartTotal,
+        totalAmount: _subTotal,
+        discount: _discount,
+        paymentMethod: _paymentMethod,
+        customerId: _selectedCustomerId,
       );
       if (!mounted) return;
       setState(() {
         _cart.clear();
+        _discountController.text = '0';
         _saving = false;
       });
-      await _loadProducts();
+      await _loadData();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('تم حفظ الفاتورة رقم $invNum وتحديث المخزون'),
+          content: Text('تم حفظ الفاتورة رقم $invNum وتحديث المخزون والحساب'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -1155,7 +1783,36 @@ class _PosScreenState extends State<PosScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: DropdownButtonFormField<int?>(
+              value: _selectedCustomerId,
+              decoration: InputDecoration(
+                labelText: 'العميل (افتراضي: عميل نقدي)',
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              items: [
+                const DropdownMenuItem<int?>(
+                  value: null,
+                  child: Text('عميل نقدي عام'),
+                ),
+                ..._customers.map(
+                  (c) => DropdownMenuItem<int?>(
+                    value: c['id'] as int,
+                    child: Text('${c['name']} (الرصيد: ${c['balance']})'),
+                  ),
+                ),
+              ],
+              onChanged: (val) => setState(() => _selectedCustomerId = val),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
             child: TextField(
               onChanged: (val) => setState(() => _search = val),
               decoration: InputDecoration(
@@ -1171,7 +1828,7 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ),
           Expanded(
-            flex: 5,
+            flex: 4,
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : items.isEmpty
@@ -1185,8 +1842,9 @@ class _PosScreenState extends State<PosScreen> {
                           final price = (pRow['sale_price'] as num?)?.toDouble() ?? 0.0;
 
                           return Card(
-                            margin: const EdgeInsets.only(bottom: 8),
+                            margin: const EdgeInsets.only(bottom: 6),
                             child: ListTile(
+                              dense: true,
                               onTap: () => _addToCart(pRow),
                               title: Text(
                                 (pRow['name'] ?? '').toString(),
@@ -1208,7 +1866,7 @@ class _PosScreenState extends State<PosScreen> {
           ),
           const Divider(height: 1),
           Expanded(
-            flex: 4,
+            flex: 5,
             child: Container(
               color: Colors.white,
               padding: const EdgeInsets.all(12),
@@ -1219,10 +1877,10 @@ class _PosScreenState extends State<PosScreen> {
                     children: [
                       const Text(
                         'سلة الفاتورة',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                       ),
                       Text(
-                        'الإجمالي: ${_cartTotal.toStringAsFixed(2)}',
+                        'الصافي: ${_netTotal.toStringAsFixed(2)}',
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
@@ -1231,7 +1889,7 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Expanded(
                     child: _cart.isEmpty
                         ? const Center(
@@ -1274,10 +1932,45 @@ class _PosScreenState extends State<PosScreen> {
                             },
                           ),
                   ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _discountController,
+                          onChanged: (_) => setState(() {}),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'الخصم',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: _paymentMethod,
+                          decoration: const InputDecoration(
+                            labelText: 'طريقة الدفع',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 'نقدي', child: Text('نقدي')),
+                            DropdownMenuItem(value: 'آجل', child: Text('آجل')),
+                          ],
+                          onChanged: (val) {
+                            if (val != null) setState(() => _paymentMethod = val);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
-                    height: 48,
+                    height: 46,
                     child: FilledButton.icon(
                       onPressed: _cart.isEmpty || _saving ? null : _checkout,
                       icon: const Icon(Icons.check_circle_outline),
