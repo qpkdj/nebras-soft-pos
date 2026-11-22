@@ -168,7 +168,7 @@ class DatabaseHelper {
   }
 
   Future<String> createSaleInvoice({
-    required List> cartItems,
+    required List<DbRow> cartItems,
     required double totalAmount,
     String paymentMethod = 'نقدي',
   }) async {
@@ -429,7 +429,7 @@ class PosScreen extends StatefulWidget {
 
 class _PosScreenState extends State<PosScreen> {
   List<DbRow> _products = [];
-  List> _cart = [];
+  List<DbRow> _cart = [];
   String _search = '';
   bool _loading = true;
   bool _saving = false;
