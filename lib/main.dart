@@ -166,6 +166,57 @@ class DatabaseHelper {
       whereArgs: [id],
     );
   }
+
+  Future<String> createSaleInvoice({
+    required List> cartItems,
+    required double totalAmount,
+    String paymentMethod = 'نقدي',
+  }) async {
+    final db = await instance.database;
+    final now = DateTime.now();
+    final invoiceNumber = 'INV-${now.millisecondsSinceEpoch}';
+
+    await db.transaction((txn) async {
+      final invoiceId = await txn.insert('invoices', {
+        'invoice_number': invoiceNumber,
+        'contact_id': null,
+        'type': 'sale',
+        'date': now.toIso8601String(),
+        'total_amount': totalAmount,
+        'discount': 0.0,
+        'tax': 0.0,
+        'paid_amount': totalAmount,
+        'payment_method': paymentMethod,
+        'user_id': 1,
+      });
+
+      for (final item in cartItems) {
+        final int productId = item['product_id'] as int;
+        final double qty = (item['quantity'] as num).toDouble();
+        final double price = (item['price'] as num).toDouble();
+        final double lineTotal = qty * price;
+        final double currentStock = (item['stock_quantity'] as num).toDouble();
+        final double newStock = (currentStock - qty) < 0 ? 0.0 : (currentStock - qty);
+
+        await txn.insert('invoice_items', {
+          'invoice_id': invoiceId,
+          'product_id': productId,
+          'quantity': qty,
+          'price': price,
+          'total': lineTotal,
+        });
+
+        await txn.update(
+          'products',
+          {'stock_quantity': newStock},
+          where: 'id = ?',
+          whereArgs: [productId],
+        );
+      }
+    });
+
+    return invoiceNumber;
+  }
 }
 
 class NebrasPosApp extends StatelessWidget {
@@ -250,6 +301,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (moduleName == 'إدارة الأصناف') {
       await Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ProductsScreen()),
+      );
+      _refreshStats();
+      return;
+    }
+
+    if (moduleName == 'نقطة البيع (POS)') {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PosScreen()),
       );
       _refreshStats();
       return;
@@ -356,6 +415,299 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class PosScreen extends StatefulWidget {
+  const PosScreen({super.key});
+
+  @override
+  State<PosScreen> createState() => _PosScreenState();
+}
+
+class _PosScreenState extends State<PosScreen> {
+  List<DbRow> _products = [];
+  List> _cart = [];
+  String _search = '';
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProducts();
+  }
+
+  Future<void> _loadProducts() async {
+    setState(() => _loading = true);
+    final rows = await DatabaseHelper.instance.queryAllProducts();
+    if (!mounted) return;
+    setState(() {
+      _products = rows;
+      _loading = false;
+    });
+  }
+
+  List<DbRow> get _filteredProducts {
+    final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return _products;
+    return _products.where((item) {
+      final name = (item['name'] ?? '').toString().toLowerCase();
+      final barcode = (item['barcode'] ?? '').toString().toLowerCase();
+      return name.contains(q) || barcode.contains(q);
+    }).toList();
+  }
+
+  double get _cartTotal {
+    double sum = 0.0;
+    for (final item in _cart) {
+      final qty = (item['quantity'] as num).toDouble();
+      final price = (item['price'] as num).toDouble();
+      sum += qty * price;
+    }
+    return sum;
+  }
+
+  void _addToCart(DbRow product) {
+    final int productId = product['id'] as int;
+    final double stock = (product['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+    final double price = (product['sale_price'] as num?)?.toDouble() ?? 0.0;
+    final String name = (product['name'] ?? '').toString();
+
+    final index = _cart.indexWhere((c) => c['product_id'] == productId);
+    if (index >= 0) {
+      final currentQty = (_cart[index]['quantity'] as num).toDouble();
+      if (stock > 0 && currentQty + 1 > stock) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('الكمية المتوفرة للصنف "$name" هي $stock فقط')),
+        );
+        return;
+      }
+      setState(() {
+        _cart[index]['quantity'] = currentQty + 1;
+      });
+    } else {
+      if (stock <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('الصنف "$name" غير متوفر في المخزون حالياً')),
+        );
+        return;
+      }
+      setState(() {
+        _cart.add({
+          'product_id': productId,
+          'name': name,
+          'price': price,
+          'quantity': 1.0,
+          'stock_quantity': stock,
+        });
+      });
+    }
+  }
+
+  void _changeQty(int index, double delta) {
+    final currentQty = (_cart[index]['quantity'] as num).toDouble();
+    final stock = (_cart[index]['stock_quantity'] as num).toDouble();
+    final nextQty = currentQty + delta;
+
+    if (nextQty <= 0) {
+      setState(() => _cart.removeAt(index));
+      return;
+    }
+    if (delta > 0 && nextQty > stock) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('الحد الأقصى المتوفر هو $stock')),
+      );
+      return;
+    }
+    setState(() {
+      _cart[index]['quantity'] = nextQty;
+    });
+  }
+
+  Future<void> _checkout() async {
+    if (_cart.isEmpty || _saving) return;
+    setState(() => _saving = true);
+
+    try {
+      final invNum = await DatabaseHelper.instance.createSaleInvoice(
+        cartItems: _cart,
+        totalAmount: _cartTotal,
+      );
+      if (!mounted) return;
+      setState(() {
+        _cart.clear();
+        _saving = false;
+      });
+      await _loadProducts();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تم حفظ الفاتورة رقم $invNum وتحديث المخزون'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('حدث خطأ أثناء حفظ الفاتورة')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _filteredProducts;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'نقطة البيع (POS)',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF1545B5),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            child: TextField(
+              onChanged: (val) => setState(() => _search = val),
+              decoration: InputDecoration(
+                hintText: 'ابحث بالاسم أو الباركود لإضافة الصنف للفاتورة...',
+                prefixIcon: const Icon(Icons.qr_code_scanner),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 5,
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : items.isEmpty
+                    ? const Center(child: Text('لا توجد أصناف مطابقة'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        itemCount: items.length,
+                        itemBuilder: (context, index) {
+                          final pRow = items[index];
+                          final qty = (pRow['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+                          final price = (pRow['sale_price'] as num?)?.toDouble() ?? 0.0;
+
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              onTap: () => _addToCart(pRow),
+                              title: Text(
+                                (pRow['name'] ?? '').toString(),
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text('المتوفر: $qty'),
+                              trailing: Text(
+                                '$price',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                  color: Color(0xFF1545B5),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            flex: 4,
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'سلة الفاتورة',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      Text(
+                        'الإجمالي: ${_cartTotal.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Color(0xFF0D7C66),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: _cart.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'اضغط على أي صنف بالأعلى لإضافته إلى الفاتورة',
+                              style: TextStyle(color: Colors.black54),
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: _cart.length,
+                            itemBuilder: (context, index) {
+                              final item = _cart[index];
+                              final qty = (item['quantity'] as num).toDouble();
+                              final price = (item['price'] as num).toDouble();
+                              final lineTotal = qty * price;
+
+                              return ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  item['name'].toString(),
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                subtitle: Text('$price × $qty = ${lineTotal.toStringAsFixed(2)}'),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.remove_circle_outline),
+                                      onPressed: () => _changeQty(index, -1),
+                                    ),
+                                    Text('$qty'),
+                                    IconButton(
+                                      icon: const Icon(Icons.add_circle_outline),
+                                      onPressed: () => _changeQty(index, 1),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: FilledButton.icon(
+                      onPressed: _cart.isEmpty || _saving ? null : _checkout,
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: Text(_saving ? 'جاري الحفظ...' : 'إتمام الفاتورة'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
