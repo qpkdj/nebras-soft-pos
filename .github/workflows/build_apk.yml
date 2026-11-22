@@ -29,6 +29,17 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Fix Assets & Icon Path
+        run: |
+          mkdir -p assets/icon
+          if [ ! -f "assets/icon/app_icon.png" ]; then
+            FOUND_ICON=$(find . -maxdepth 3 \( -iname "app_icon.png" -o -iname "*.png" \) -not -path "./.git/*" -not -path "./android/*" | head -n 1)
+            if [ -n "$FOUND_ICON" ]; then
+              cp "$FOUND_ICON" assets/icon/app_icon.png
+            fi
+          fi
+          touch assets/icon/.keep
+
       - name: Generate Android Wrapper (Cloud)
         run: |
           if [ ! -d "android" ]; then
@@ -48,7 +59,16 @@ jobs:
           fi
 
       - name: Build Release APK
-        run: flutter build apk --release
+        run: |
+          set +e
+          flutter build apk --release --no-tree-shake-icons 2>&1 | tee build.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "========== REAL ERROR =========="
+            grep -iE "error:|unable to find|not found|target .* failed|exception" build.log | tail -n 15
+            echo "================================"
+            exit $EXIT_CODE
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
