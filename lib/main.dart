@@ -49,7 +49,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -79,6 +79,8 @@ class DatabaseHelper {
         category_id INTEGER,
         purchase_price $doubleDefaultZero,
         sale_price $doubleType,
+        wholesale_price $doubleDefaultZero,
+        special_price $doubleDefaultZero,
         stock_quantity $doubleDefaultZero,
         min_stock $doubleDefaultZero,
         image_path $textNullable,
@@ -171,6 +173,10 @@ class DatabaseHelper {
       await db.execute("ALTER TABLE contacts ADD COLUMN price_tier TEXT NOT NULL DEFAULT 'تجزئة'");
       await db.execute('ALTER TABLE contacts ADD COLUMN credit_limit REAL NOT NULL DEFAULT 0.0');
       await db.execute('ALTER TABLE contacts ADD COLUMN due_days INTEGER NOT NULL DEFAULT 30');
+    }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE products ADD COLUMN wholesale_price REAL NOT NULL DEFAULT 0.0');
+      await db.execute('ALTER TABLE products ADD COLUMN special_price REAL NOT NULL DEFAULT 0.0');
     }
   }
 
@@ -2250,7 +2256,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         keyboardType: TextInputType.phone,
                         decoration: const InputDecoration(
                           labelText: 'رقم الهاتف',
-                          border: OutlineInputBorder(),
+                          border: const OutlineInputBorder(),
                         ),
                       ),
                     ),
@@ -2283,7 +2289,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   controller: addressCtrl,
                   decoration: const InputDecoration(
                     labelText: 'العنوان',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 if (isCustomer) ...[
@@ -2543,6 +2549,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           final overLimit = isCustomer && limit > 0 && balance >= limit;
                           final phone = c['phone']?.toString() ?? '';
                           final code = c['code']?.toString() ?? '';
+                          final tier = (c['price_tier'] ?? 'تجزئة').toString();
                           final int contactId = c['id'] as int;
 
                           return Card(
@@ -2558,6 +2565,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                               ),
                               subtitle: Text(
                                 'الرصيد: ${balance.toStringAsFixed(2)}'
+                                '${isCustomer ? ' • فئة: $tier' : ''}'
                                 '${phone.isNotEmpty ? ' • هاتف: $phone' : ''}'
                                 '${isCustomer && limit > 0 ? ' • سقف الآجل: $limit' : ''}',
                               ),
@@ -3150,6 +3158,44 @@ class _PosScreenState extends State<PosScreen> {
     super.dispose();
   }
 
+  String get _activePriceTier {
+    if (_selectedCustomerId == null) return 'تجزئة';
+    final customer = _customers.firstWhere(
+      (c) => c['id'] == _selectedCustomerId,
+      orElse: () => <String, dynamic>{},
+    );
+    final tier = (customer['price_tier'] ?? 'تجزئة').toString().trim();
+    return tier.isEmpty ? 'تجزئة' : tier;
+  }
+
+  double _resolveProductPrice(DbRow product, String tier) {
+    final double retail = (product['sale_price'] as num?)?.toDouble() ?? 0.0;
+    final double wholesale = (product['wholesale_price'] as num?)?.toDouble() ?? 0.0;
+    final double special = (product['special_price'] as num?)?.toDouble() ?? 0.0;
+
+    if (tier == 'جملة' && wholesale > 0) {
+      return wholesale;
+    }
+    if (tier == 'خاص' && special > 0) {
+      return special;
+    }
+    return retail;
+  }
+
+  void _recalculateCartPrices() {
+    final tier = _activePriceTier;
+    for (final item in _cart) {
+      final int pid = item['product_id'] as int;
+      final prod = _products.firstWhere(
+        (p) => p['id'] == pid,
+        orElse: () => <String, dynamic>{},
+      );
+      if (prod.isNotEmpty) {
+        item['price'] = _resolveProductPrice(prod, tier);
+      }
+    }
+  }
+
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final rows = await DatabaseHelper.instance.queryAllProducts();
@@ -3158,6 +3204,7 @@ class _PosScreenState extends State<PosScreen> {
     setState(() {
       _products = rows;
       _customers = customers;
+      _recalculateCartPrices();
       _loading = false;
     });
   }
@@ -3192,7 +3239,7 @@ class _PosScreenState extends State<PosScreen> {
   void _addToCart(DbRow product) {
     final int productId = product['id'] as int;
     final double stock = (product['stock_quantity'] as num?)?.toDouble() ?? 0.0;
-    final double price = (product['sale_price'] as num?)?.toDouble() ?? 0.0;
+    final double price = _resolveProductPrice(product, _activePriceTier);
     final String name = (product['name'] ?? '').toString();
 
     final index = _cart.indexWhere((c) => c['product_id'] == productId);
@@ -3206,6 +3253,7 @@ class _PosScreenState extends State<PosScreen> {
       }
       setState(() {
         _cart[index]['quantity'] = currentQty + 1;
+        _cart[index]['price'] = price;
       });
     } else {
       if (stock <= 0) {
@@ -3331,6 +3379,7 @@ class _PosScreenState extends State<PosScreen> {
   @override
   Widget build(BuildContext context) {
     final items = _filteredProducts;
+    final tierLabel = _activePriceTier;
 
     return Scaffold(
       appBar: AppBar(
@@ -3348,7 +3397,7 @@ class _PosScreenState extends State<PosScreen> {
             child: DropdownButtonFormField<int?>(
               value: _selectedCustomerId,
               decoration: InputDecoration(
-                labelText: 'العميل (افتراضي: عميل نقدي)',
+                labelText: 'العميل • فئة السعر الحالية: $tierLabel',
                 filled: true,
                 fillColor: Colors.white,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -3360,16 +3409,23 @@ class _PosScreenState extends State<PosScreen> {
               items: [
                 const DropdownMenuItem<int?>(
                   value: null,
-                  child: Text('عميل نقدي عام'),
+                  child: Text('عميل نقدي عام (سعر تجزئة)'),
                 ),
                 ..._customers.map(
                   (c) => DropdownMenuItem<int?>(
                     value: c['id'] as int,
-                    child: Text('${c['name']} (الرصيد: ${c['balance']})'),
+                    child: Text(
+                      '${c['name']} • ${c['price_tier'] ?? 'تجزئة'} (الرصيد: ${c['balance']})',
+                    ),
                   ),
                 ),
               ],
-              onChanged: (val) => setState(() => _selectedCustomerId = val),
+              onChanged: (val) {
+                setState(() {
+                  _selectedCustomerId = val;
+                  _recalculateCartPrices();
+                });
+              },
             ),
           ),
           Padding(
@@ -3414,7 +3470,7 @@ class _PosScreenState extends State<PosScreen> {
                         itemBuilder: (context, index) {
                           final pRow = items[index];
                           final qty = (pRow['stock_quantity'] as num?)?.toDouble() ?? 0.0;
-                          final price = (pRow['sale_price'] as num?)?.toDouble() ?? 0.0;
+                          final price = _resolveProductPrice(pRow, tierLabel);
 
                           return Card(
                             margin: const EdgeInsets.only(bottom: 6),
@@ -3425,9 +3481,9 @@ class _PosScreenState extends State<PosScreen> {
                                 (pRow['name'] ?? '').toString(),
                                 style: const TextStyle(fontWeight: FontWeight.bold),
                               ),
-                              subtitle: Text('المتوفر: $qty'),
+                              subtitle: Text('المتوفر: $qty • فئة: $tierLabel'),
                               trailing: Text(
-                                '$price',
+                                price.toStringAsFixed(2),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 15,
@@ -3488,7 +3544,7 @@ class _PosScreenState extends State<PosScreen> {
                                   item['name'].toString(),
                                   style: const TextStyle(fontWeight: FontWeight.bold),
                                 ),
-                                subtitle: Text('$price × $qty = ${lineTotal.toStringAsFixed(2)}'),
+                                subtitle: Text('${price.toStringAsFixed(2)} × $qty = ${lineTotal.toStringAsFixed(2)}'),
                                 trailing: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -3640,6 +3696,12 @@ class _ProductsScreenState extends State<ProductsScreen> {
     final saleController = TextEditingController(
       text: existingProduct != null ? (existingProduct['sale_price'] ?? '').toString() : '',
     );
+    final wholesaleController = TextEditingController(
+      text: (existingProduct?['wholesale_price'] ?? 0).toString(),
+    );
+    final specialController = TextEditingController(
+      text: (existingProduct?['special_price'] ?? 0).toString(),
+    );
     final qtyController = TextEditingController(
       text: (existingProduct?['stock_quantity'] ?? 0).toString(),
     );
@@ -3720,7 +3782,33 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         controller: saleController,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         decoration: const InputDecoration(
-                          labelText: 'سعر البيع *',
+                          labelText: 'سعر البيع (تجزئة) *',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: wholesaleController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'سعر الجملة',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: specialController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'سعر خاص',
                           border: OutlineInputBorder(),
                         ),
                       ),
@@ -3778,6 +3866,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   'barcode': barcodeText.isEmpty ? null : barcodeText,
                   'purchase_price': double.tryParse(purchaseController.text.trim()) ?? 0.0,
                   'sale_price': salePrice,
+                  'wholesale_price': double.tryParse(wholesaleController.text.trim()) ?? 0.0,
+                  'special_price': double.tryParse(specialController.text.trim()) ?? 0.0,
                   'stock_quantity': double.tryParse(qtyController.text.trim()) ?? 0.0,
                   'min_stock': double.tryParse(minStockController.text.trim()) ?? 0.0,
                   'is_active': 1,
@@ -3888,6 +3978,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
                           final minStock = (pRow['min_stock'] as num?)?.toDouble() ?? 0.0;
                           final isLow = qty <= minStock;
                           final barcode = pRow['barcode']?.toString();
+                          final wholesale = (pRow['wholesale_price'] as num?)?.toDouble() ?? 0.0;
+                          final special = (pRow['special_price'] as num?)?.toDouble() ?? 0.0;
 
                           return Card(
                             margin: const EdgeInsets.only(bottom: 10),
@@ -3901,7 +3993,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                 style: const TextStyle(fontWeight: FontWeight.bold),
                               ),
                               subtitle: Text(
-                                'البيع: ${pRow['sale_price']} • الشراء: ${pRow['purchase_price']} • الكمية: $qty'
+                                'تجزئة: ${pRow['sale_price']}'
+                                '${wholesale > 0 ? ' • جملة: $wholesale' : ''}'
+                                '${special > 0 ? ' • خاص: $special' : ''}'
+                                ' • الكمية: $qty'
                                 '${barcode != null && barcode.isNotEmpty ? ' • باركود: $barcode' : ''}',
                               ),
                               trailing: Row(
