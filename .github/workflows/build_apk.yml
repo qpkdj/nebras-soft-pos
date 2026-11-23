@@ -50,6 +50,14 @@ jobs:
           import os
           import re
 
+          main_p = Path("lib/main.dart")
+          if main_p.exists():
+              m_code = main_p.read_text(encoding="utf-8")
+              # إصلاح تلقائي لجميع الدوال التي ابتلع المتصفح نوعها عند اللصق
+              m_code = re.sub(r"\bFuture\s*>\s*getSettingsMap\b", "Future> getSettingsMap", m_code)
+              m_code = re.sub(r"\bFuture\s*>", "Future>", m_code)
+              main_p.write_text(m_code, encoding="utf-8")
+
           manifest_p = Path("android/app/src/main/AndroidManifest.xml")
           if manifest_p.exists():
               mtxt = manifest_p.read_text(encoding="utf-8")
