@@ -62,10 +62,38 @@ jobs:
               gtxt = re.sub(r"(compileSdk(?:Version)?)\s*(?:=|\()\s*[^\r\n\)]+\)?", r"\1 = 36", gtxt)
               gtxt = re.sub(r"(targetSdk(?:Version)?)\s*(?:=|\()\s*[^\r\n\)]+\)?", r"\1 = 36", gtxt)
               gradle_p.write_text(gtxt, encoding="utf-8")
+
+          icon_candidates = [
+              Path("assets/icon/app_icon.png"),
+              Path("assets/app_icon.png"),
+              Path("assets/icon.png"),
+          ]
+          found_icon = next((p for p in icon_candidates if p.exists()), None)
+          if found_icon is None and Path("assets").exists():
+              for p in Path("assets").rglob("*.png"):
+                  if "icon" in p.name.lower() or "logo" in p.name.lower():
+                      found_icon = p
+                      break
+
+          if found_icon is not None:
+              print("Using icon file:", found_icon.as_posix())
+              cfg_p = Path("flutter_launcher_icons.yaml")
+              cfg_p.write_text(
+                  f"""flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "{found_icon.as_posix()}"
+  adaptive_icon_background: "#0F2C7E"
+  adaptive_icon_foreground: "{found_icon.as_posix()}"
+""",
+                  encoding="utf-8",
+              )
+          else:
+              print("No icon file found in assets/")
           '
           flutter pub get
-          if [ -f "assets/icon/app_icon.png" ] && (grep -q "^flutter_launcher_icons:" pubspec.yaml || [ -f "flutter_launcher_icons.yaml" ]); then
-            dart run flutter_launcher_icons
+          if [ -f "flutter_launcher_icons.yaml" ]; then
+            dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
           fi
           flutter build apk --release
 
