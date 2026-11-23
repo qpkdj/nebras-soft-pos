@@ -37,11 +37,11 @@ jobs:
           sed -i 's/android:label="[^"]*"/android:label="Nebras SofT Pos"/' android/app/src/main/AndroidManifest.xml
 
           if [ -f "lib/main.dart" ]; then
-            sed -i 's/Future> getSettingsMap()/Future> getSettingsMap()/g' lib/main.dart
-            sed -i 's/Future> evaluateUpdateStatus(/Future> evaluateUpdateStatus(/g' lib/main.dart
-            sed -i 's/Future> getContactStatementData(/Future> getContactStatementData(/g' lib/main.dart
-            sed -i 's/Future> getCashboxSummary(/Future> getCashboxSummary(/g' lib/main.dart
-            sed -i 's/Future> getFinancialSummary(/Future> getFinancialSummary(/g' lib/main.dart
+            sed -i 's/Future> getSettingsMap()/Future\x3cMap\x3cString, String\x3e\x3e getSettingsMap()/g' lib/main.dart
+            sed -i 's/Future> evaluateUpdateStatus(/Future\x3cMap\x3cString, dynamic\x3e\x3e evaluateUpdateStatus(/g' lib/main.dart
+            sed -i 's/Future> getContactStatementData(/Future\x3cMap\x3cString, dynamic\x3e\x3e getContactStatementData(/g' lib/main.dart
+            sed -i 's/Future> getCashboxSummary(/Future\x3cMap\x3cString, dynamic\x3e\x3e getCashboxSummary(/g' lib/main.dart
+            sed -i 's/Future> getFinancialSummary(/Future\x3cMap\x3cString, dynamic\x3e\x3e getFinancialSummary(/g' lib/main.dart
           fi
 
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ]; then
