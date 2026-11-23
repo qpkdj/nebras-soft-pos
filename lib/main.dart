@@ -278,6 +278,70 @@ class DatabaseHelper {
     });
   }
 
+  Future getContactStatementData(int contactId) async {
+    final db = await instance.database;
+    final contactRows = await db.query(
+      'contacts',
+      where: 'id = ?',
+      whereArgs: [contactId],
+      limit: 1,
+    );
+    if (contactRows.isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    final contact = contactRows.first;
+    final invoices = await db.query(
+      'invoices',
+      where: 'contact_id = ?',
+      whereArgs: [contactId],
+      orderBy: 'date DESC, id DESC',
+    );
+    final vouchers = await db.query(
+      'vouchers',
+      where: 'contact_id = ?',
+      whereArgs: [contactId],
+      orderBy: 'date DESC, id DESC',
+    );
+
+    final List<DbRow> movements = [];
+
+    for (final inv in invoices) {
+      final isSale = inv['type'] == 'sale';
+      final method = (inv['payment_method'] ?? '').toString();
+      final total = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
+      movements.add({
+        'date': (inv['date'] ?? '').toString(),
+        'reference': (inv['invoice_number'] ?? '').toString(),
+        'description': isSale ? 'فاتورة مبيعات ($method)' : 'فاتورة مشتريات ($method)',
+        'amount': total,
+        'kind': isSale ? 'sale' : 'purchase',
+      });
+    }
+
+    for (final v in vouchers) {
+      final isReceipt = v['type'] == 'receipt';
+      final amt = (v['amount'] as num?)?.toDouble() ?? 0.0;
+      final notes = (v['notes'] ?? '').toString();
+      movements.add({
+        'date': (v['date'] ?? '').toString(),
+        'reference': (v['voucher_number'] ?? '').toString(),
+        'description': isReceipt
+            ? 'سند قبض${notes.isNotEmpty ? ' - $notes' : ''}'
+            : 'سند صرف${notes.isNotEmpty ? ' - $notes' : ''}',
+        'amount': amt,
+        'kind': isReceipt ? 'receipt' : 'payment',
+      });
+    }
+
+    movements.sort((a, b) => (b['date'] ?? '').toString().compareTo((a['date'] ?? '').toString()));
+
+    return {
+      'contact': contact,
+      'movements': movements,
+    };
+  }
+
   Future<String> createVoucher({
     required int contactId,
     required String type,
@@ -746,6 +810,259 @@ class ThermalPdfService {
     );
 
     return pdf.save();
+  }
+
+  static Future<Uint8List> buildContactStatementPdf({
+    required DbRow contact,
+    required List<DbRow> movements,
+    required Map<String, String> settings,
+  }) async {
+    final fontRegular = await PdfGoogleFonts.cairoRegular();
+    final fontBold = await PdfGoogleFonts.cairoBold();
+
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: fontRegular,
+        bold: fontBold,
+      ),
+    );
+
+    final bool isCustomer = contact['type'] == 'customer';
+    final String shopName = (settings['shop_name'] ?? 'نبراس SofT لنقاط البيع').trim();
+    final String shopPhone = (settings['shop_phone'] ?? '').trim();
+    final String shopAddress = (settings['shop_address'] ?? '').trim();
+    final String currency = (settings['currency_symbol'] ?? 'ر.ي').trim();
+
+    final String contactName = (contact['name'] ?? '').toString();
+    final String contactPhone = (contact['phone'] ?? '').toString();
+    final String contactCode = (contact['code'] ?? '').toString();
+    final double balance = (contact['balance'] as num?)?.toDouble() ?? 0.0;
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(20),
+        textDirection: pw.TextDirection.rtl,
+        build: (pw.Context ctx) {
+          return [
+            pw.Text(
+              shopName.isEmpty ? 'Nebras SofT Pos' : shopName,
+              textAlign: pw.TextAlign.center,
+              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            ),
+            if (shopPhone.isNotEmpty || shopAddress.isNotEmpty)
+              pw.Text(
+                [
+                  if (shopPhone.isNotEmpty) 'هاتف: $shopPhone',
+                  if (shopAddress.isNotEmpty) shopAddress,
+                ].join(' • '),
+                textAlign: pw.TextAlign.center,
+                style: const pw.TextStyle(fontSize: 9.5),
+              ),
+            pw.SizedBox(height: 6),
+            pw.Text(
+              isCustomer ? 'كشف حساب عميل تفصيلي' : 'كشف حساب مورد تفصيلي',
+              textAlign: pw.TextAlign.center,
+              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.Divider(thickness: 1),
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  '${isCustomer ? 'العميل' : 'المورد'}: $contactName ${contactCode.isNotEmpty ? '($contactCode)' : ''}',
+                  style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.Text(
+                  'تاريخ الكشف: ${DateTime.now().toString().split(' ').first}',
+                  style: const pw.TextStyle(fontSize: 9.5),
+                ),
+              ],
+            ),
+            if (contactPhone.isNotEmpty)
+              pw.Text('رقم الهاتف: $contactPhone', style: const pw.TextStyle(fontSize: 9.5)),
+            pw.SizedBox(height: 8),
+            pw.Table(
+              border: pw.TableBorder.all(width: 0.6, color: PdfColors.grey600),
+              columnWidths: {
+                0: const pw.FlexColumnWidth(2.2),
+                1: const pw.FlexColumnWidth(2.2),
+                2: const pw.FlexColumnWidth(3.6),
+                3: const pw.FlexColumnWidth(2.0),
+              },
+              children: [
+                pw.TableRow(
+                  decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                  children: [
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text('التاريخ', style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text('المرجع', style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text('البيان', style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
+                    ),
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(6),
+                      child: pw.Text(
+                        'المبلغ ($currency)',
+                        textAlign: pw.TextAlign.left,
+                        style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                if (movements.isEmpty)
+                  pw.TableRow(
+                    children: [
+                      pw.Padding(
+                        padding: const pw.EdgeInsets.all(8),
+                        child: pw.Text('لا توجد حركات مسجلة', style: const pw.TextStyle(fontSize: 9)),
+                      ),
+                      pw.SizedBox(),
+                      pw.SizedBox(),
+                      pw.SizedBox(),
+                    ],
+                  )
+                else
+                  ...movements.map((m) {
+                    final rawDate = (m['date'] ?? '').toString().split('T').first;
+                    final ref = (m['reference'] ?? '').toString();
+                    final desc = (m['description'] ?? '').toString();
+                    final amt = (m['amount'] as num?)?.toDouble() ?? 0.0;
+
+                    return pw.TableRow(
+                      children: [
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.all(5),
+                          child: pw.Text(rawDate, style: const pw.TextStyle(fontSize: 8.5)),
+                        ),
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.all(5),
+                          child: pw.Text(ref, style: const pw.TextStyle(fontSize: 8.5)),
+                        ),
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.all(5),
+                          child: pw.Text(desc, style: const pw.TextStyle(fontSize: 8.5)),
+                        ),
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.all(5),
+                          child: pw.Text(
+                            amt.toStringAsFixed(2),
+                            textAlign: pw.TextAlign.left,
+                            style: const pw.TextStyle(fontSize: 8.5),
+                          ),
+                        ),
+                      ],
+                    );
+                  }),
+              ],
+            ),
+            pw.SizedBox(height: 12),
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  'الرصيد الحالي:',
+                  style: pw.TextStyle(fontSize: 11.5, fontWeight: pw.FontWeight.bold),
+                ),
+                pw.Text(
+                  '${balance.toStringAsFixed(2)} $currency',
+                  style: pw.TextStyle(fontSize: 11.5, fontWeight: pw.FontWeight.bold),
+                ),
+              ],
+            ),
+          ];
+        },
+      ),
+    );
+
+    return pdf.save();
+  }
+
+  static Future<void> showContactStatementSheet(BuildContext context, int contactId) async {
+    final statementData = await DatabaseHelper.instance.getContactStatementData(contactId) as DbRow;
+    if (statementData.isEmpty) return;
+
+    final settings = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
+    final contact = statementData['contact'] as DbRow;
+    final movements = (statementData['movements'] as List<DbRow>?) ?? [];
+    final String contactName = (contact['name'] ?? '').toString();
+
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.description_outlined, size: 38, color: Color(0xFF7C3AED)),
+            const SizedBox(height: 8),
+            Text(
+              'كشف حساب: $contactName',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'عدد الحركات: ${movements.length} • الرصيد الحالي: ${((contact['balance'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)} ${settings['currency_symbol'] ?? 'ر.ي'}',
+              style: const TextStyle(color: Colors.black54, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF7C3AED)),
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      final bytes = await buildContactStatementPdf(
+                        contact: contact,
+                        movements: movements,
+                        settings: settings,
+                      );
+                      await Printing.layoutPdf(
+                        name: 'statement_$contactId.pdf',
+                        onLayout: (_) async => bytes,
+                      );
+                    },
+                    icon: const Icon(Icons.print),
+                    label: const Text('طباعة الكشف'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      final bytes = await buildContactStatementPdf(
+                        contact: contact,
+                        movements: movements,
+                        settings: settings,
+                      );
+                      await Printing.sharePdf(
+                        bytes: bytes,
+                        filename: 'statement_$contactId.pdf',
+                      );
+                    },
+                    icon: const Icon(Icons.picture_as_pdf),
+                    label: const Text('مشاركة PDF'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   static Future<void> printThermalInvoice(
@@ -1684,7 +2001,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         keyboardType: TextInputType.phone,
                         decoration: const InputDecoration(
                           labelText: 'رقم الهاتف',
-                          border: OutlineInputBorder(),
+                          border: const OutlineInputBorder(),
                         ),
                       ),
                     ),
@@ -1717,7 +2034,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   controller: addressCtrl,
                   decoration: const InputDecoration(
                     labelText: 'العنوان',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 if (isCustomer) ...[
@@ -1977,6 +2294,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           final overLimit = isCustomer && limit > 0 && balance >= limit;
                           final phone = c['phone']?.toString() ?? '';
                           final code = c['code']?.toString() ?? '';
+                          final int contactId = c['id'] as int;
 
                           return Card(
                             margin: const EdgeInsets.only(bottom: 10),
@@ -2013,6 +2331,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                         ),
                                       ),
                                     ),
+                                  IconButton(
+                                    tooltip: 'كشف حساب PDF',
+                                    icon: const Icon(Icons.description_outlined, color: Color(0xFF0369A1)),
+                                    onPressed: () => ThermalPdfService.showContactStatementSheet(context, contactId),
+                                  ),
                                   IconButton(
                                     tooltip: isCustomer ? 'سند قبض' : 'سند صرف',
                                     icon: const Icon(Icons.payments_outlined, color: Color(0xFF7C3AED)),
