@@ -64,7 +64,25 @@ jobs:
             echo "$KEYSTORE_BASE64" | base64 -d > android/app/nebras-release.jks
           fi
 
+          ICON_PATH=""
+          for candidate in "assets/icon/app_icon.png" "assets/app_icon.png" "assets/icon.png"; do
+            if [ -f "$candidate" ]; then
+              ICON_PATH="$candidate"
+              break
+            fi
+          done
+          if [ -z "$ICON_PATH" ] && [ -d "assets" ]; then
+            ICON_PATH=$(find assets -type f \( -iname "*icon*.png" -o -iname "*logo*.png" \) | head -n 1)
+          fi
+
+          if [ -n "$ICON_PATH" ]; then
+            printf 'flutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "%s"\n  adaptive_icon_background: "#0F2C7E"\n  adaptive_icon_foreground: "%s"\n' "$ICON_PATH" "$ICON_PATH" > flutter_launcher_icons.yaml
+          fi
+
           flutter pub get
+          if [ -f "flutter_launcher_icons.yaml" ]; then
+            dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
+          fi
           flutter build apk --release
 
       - uses: actions/upload-artifact@v4
