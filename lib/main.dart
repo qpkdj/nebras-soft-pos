@@ -100,7 +100,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -117,7 +117,7 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE categories (
         id $idType,
-        name $textType,
+        name $textType UNIQUE,
         color $textNullable
       )
     ''');
@@ -219,6 +219,7 @@ class DatabaseHelper {
       )
     ''');
 
+    await db.insert('categories', {'name': 'عام', 'color': '#1545B5'});
     await db.insert('settings', {'key': 'shop_name', 'value': 'نبراس SofT لنقاط البيع'});
     await db.insert('settings', {'key': 'shop_phone', 'value': ''});
     await db.insert('settings', {'key': 'shop_address', 'value': ''});
@@ -252,6 +253,39 @@ class DatabaseHelper {
         )
       ''');
     }
+    if (oldVersion < 5) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS categories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          color TEXT
+        )
+      ''');
+      await db.insert(
+        'categories',
+        {'name': 'عام', 'color': '#1545B5'},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+  }
+
+  Future<List<DbRow>> queryAllCategories() async {
+    final db = await instance.database;
+    return await db.query('categories', orderBy: 'id ASC');
+  }
+
+  Future<int> insertCategory(String name) async {
+    final db = await instance.database;
+    return await db.insert(
+      'categories',
+      {'name': name, 'color': '#0D7C66'},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<int> deleteCategory(int id) async {
+    final db = await instance.database;
+    return await db.delete('categories', where: 'id = ?', whereArgs: [id]);
   }
 
   Future getSettingsMap() async {
@@ -322,17 +356,29 @@ class DatabaseHelper {
 
   Future<List<DbRow>> queryAllProducts() async {
     final db = await instance.database;
-    return await db.query(
-      'products',
-      where: 'is_active = 1',
-      orderBy: 'id DESC',
-    );
+    return await db.rawQuery('''
+      SELECT p.*, COALESCE(c.name, 'عام') AS category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.is_active = 1
+      ORDER BY p.id DESC
+    ''');
   }
 
   Future<int> updateProduct(DbRow row) async {
     final db = await instance.database;
     final int id = row['id'] as int;
     return await db.update('products', row, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<int> updateProductBarcode(int productId, String barcode) async {
+    final db = await instance.database;
+    return await db.update(
+      'products',
+      {'barcode': barcode.trim().isEmpty ? null : barcode.trim()},
+      where: 'id = ?',
+      whereArgs: [productId],
+    );
   }
 
   Future<int> deleteProduct(int id) async {
@@ -808,6 +854,105 @@ class DatabaseHelper {
     return true;
   }
 
+  Future getCashboxSummary({DateTime? startDate, DateTime? endDate}) async {
+    final db = await instance.database;
+    final allInvoices = await db.query('invoices', orderBy: 'id DESC');
+    final allVouchers = await db.query('vouchers', orderBy: 'id DESC');
+    final allExpenses = await db.query('expenses', orderBy: 'id DESC');
+
+    final filteredInvoices = allInvoices.where((inv) {
+      return _isWithinRange((inv['date'] ?? '').toString(), startDate, endDate);
+    }).toList();
+    final filteredVouchers = allVouchers.where((v) {
+      return _isWithinRange((v['date'] ?? '').toString(), startDate, endDate);
+    }).toList();
+    final filteredExpenses = allExpenses.where((e) {
+      return _isWithinRange((e['date'] ?? '').toString(), startDate, endDate);
+    }).toList();
+
+    double cashSales = 0.0;
+    double cashSaleReturns = 0.0;
+    double cashPurchases = 0.0;
+    double cashPurchaseReturns = 0.0;
+
+    for (final inv in filteredInvoices) {
+      final method = (inv['payment_method'] ?? '').toString();
+      if (method != 'نقدي') continue;
+      final t = (inv['type'] ?? '').toString();
+      final amt = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
+      if (t == 'sale') {
+        cashSales += amt;
+      } else if (t == 'sale_return') {
+        cashSaleReturns += amt;
+      } else if (t == 'purchase') {
+        cashPurchases += amt;
+      } else if (t == 'purchase_return') {
+        cashPurchaseReturns += amt;
+      }
+    }
+
+    double receiptsTotal = 0.0;
+    double paymentsTotal = 0.0;
+    for (final v in filteredVouchers) {
+      final amt = (v['amount'] as num?)?.toDouble() ?? 0.0;
+      if (v['type'] == 'receipt') {
+        receiptsTotal += amt;
+      } else {
+        paymentsTotal += amt;
+      }
+    }
+
+    double expensesTotal = 0.0;
+    for (final e in filteredExpenses) {
+      expensesTotal += (e['amount'] as num?)?.toDouble() ?? 0.0;
+    }
+
+    final netCashIn = (cashSales - cashSaleReturns) + cashPurchaseReturns + receiptsTotal;
+    final netCashOut = cashPurchases + paymentsTotal + expensesTotal;
+    final cashInBox = netCashIn - netCashOut;
+
+    final List<DbRow> entries = [];
+    for (final inv in filteredInvoices) {
+      if ((inv['payment_method'] ?? '').toString() != 'نقدي') continue;
+      final t = (inv['type'] ?? '').toString();
+      final amt = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
+      final isIncoming = t == 'sale' || t == 'purchase_return';
+      entries.add({
+        'date': (inv['date'] ?? '').toString(),
+        'title': '${_describeInvoiceType(t, 'نقدي')} • ${inv['invoice_number'] ?? ''}',
+        'amount': amt,
+        'incoming': isIncoming,
+      });
+    }
+    for (final v in filteredVouchers) {
+      final isReceipt = v['type'] == 'receipt';
+      entries.add({
+        'date': (v['date'] ?? '').toString(),
+        'title': '${isReceipt ? 'سند قبض' : 'سند صرف'} • ${v['voucher_number'] ?? ''}',
+        'amount': (v['amount'] as num?)?.toDouble() ?? 0.0,
+        'incoming': isReceipt,
+      });
+    }
+    for (final e in filteredExpenses) {
+      entries.add({
+        'date': (e['date'] ?? '').toString(),
+        'title': 'مصروف: ${e['title'] ?? ''}',
+        'amount': (e['amount'] as num?)?.toDouble() ?? 0.0,
+        'incoming': false,
+      });
+    }
+    entries.sort((a, b) => (b['date'] ?? '').toString().compareTo((a['date'] ?? '').toString()));
+
+    return {
+      'cashSales': cashSales,
+      'receiptsTotal': receiptsTotal,
+      'paymentsTotal': paymentsTotal,
+      'expensesTotal': expensesTotal,
+      'cashInBox': cashInBox,
+      'entries': entries,
+    };
+  }
+
   Future getFinancialSummary({DateTime? startDate, DateTime? endDate}) async {
     final db = await instance.database;
 
@@ -982,6 +1127,312 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 }
 
 class ThermalPdfService {
+  static String generateUniqueBarcode(int productId) {
+    final suffix = DateTime.now().millisecondsSinceEpoch % 1000000;
+    final idPart = productId.toString().padLeft(3, '0');
+    return '200$idPart$suffix';
+  }
+
+  static Future<Uint8List> buildBarcodeLabelsPdf({
+    required DbRow product,
+    required String barcodeValue,
+    required int copies,
+    required bool isA4Sheet,
+    required Map<String, String> settings,
+  }) async {
+    final fontRegular = await PdfGoogleFonts.cairoRegular();
+    final fontBold = await PdfGoogleFonts.cairoBold();
+
+    final pdf = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: fontRegular,
+        bold: fontBold,
+      ),
+    );
+
+    final String shopName = (settings['shop_name'] ?? 'نبراس SofT').trim();
+    final String currency = (settings['currency_symbol'] ?? 'ر.ي').trim();
+    final String productName = (product['name'] ?? 'صنف').toString();
+    final double salePrice = (product['sale_price'] as num?)?.toDouble() ?? 0.0;
+    final int safeCopies = copies < 1 ? 1 : (copies > 60 ? 60 : copies);
+
+    pw.Widget buildSingleLabelWidget({
+      required double width,
+      required double height,
+      required double barHeight,
+    }) {
+      return pw.Container(
+        width: width,
+        height: height,
+        padding: const pw.EdgeInsets.all(5),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(width: 0.6, color: PdfColors.grey600),
+          borderRadius: pw.BorderRadius.circular(4),
+        ),
+        child: pw.Directionality(
+          textDirection: pw.TextDirection.rtl,
+          child: pw.Column(
+            mainAxisAlignment: pw.MainAxisAlignment.center,
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [
+              pw.Text(
+                shopName,
+                maxLines: 1,
+                textAlign: pw.TextAlign.center,
+                style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold),
+              ),
+              pw.Text(
+                productName,
+                maxLines: 1,
+                textAlign: pw.TextAlign.center,
+                style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+              ),
+              pw.Text(
+                '${salePrice.toStringAsFixed(2)} $currency',
+                maxLines: 1,
+                textAlign: pw.TextAlign.center,
+                style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+              ),
+              pw.SizedBox(height: 2),
+              pw.BarcodeWidget(
+                barcode: pw.Barcode.code128(),
+                data: barcodeValue,
+                width: width - 12,
+                height: barHeight,
+                drawText: false,
+              ),
+              pw.SizedBox(height: 1.5),
+              pw.Text(
+                barcodeValue,
+                maxLines: 1,
+                textAlign: pw.TextAlign.center,
+                style: const pw.TextStyle(fontSize: 7),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (isA4Sheet) {
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(14),
+          build: (pw.Context ctx) {
+            return [
+              pw.Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: List.generate(
+                  safeCopies,
+                  (_) => buildSingleLabelWidget(
+                    width: 175,
+                    height: 92,
+                    barHeight: 28,
+                  ),
+                ),
+              ),
+            ];
+          },
+        ),
+      );
+    } else {
+      for (int i = 0; i < safeCopies; i++) {
+        pdf.addPage(
+          pw.Page(
+            pageFormat: const PdfPageFormat(58 * PdfPageFormat.mm, 40 * PdfPageFormat.mm),
+            margin: const pw.EdgeInsets.all(4),
+            build: (pw.Context ctx) {
+              return buildSingleLabelWidget(
+                width: 54 * PdfPageFormat.mm,
+                height: 36 * PdfPageFormat.mm,
+                barHeight: 30,
+              );
+            },
+          ),
+        );
+      }
+    }
+
+    return pdf.save();
+  }
+
+  static Future<void> showBarcodeGeneratorPrinterDialog(
+    BuildContext context,
+    DbRow product, {
+    VoidCallback? onBarcodeSaved,
+  }) async {
+    final settings = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
+    if (!context.mounted) return;
+
+    final int productId = product['id'] as int;
+    String initialCode = (product['barcode'] ?? '').toString().trim();
+    if (initialCode.isEmpty) {
+      initialCode = generateUniqueBarcode(productId);
+    }
+
+    final barcodeCtrl = TextEditingController(text: initialCode);
+    int copies = 4;
+    bool isA4Sheet = true;
+    bool busy = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          Future<void> runAction({required bool shareOnly}) async {
+            final code = barcodeCtrl.text.trim();
+            if (code.isEmpty || busy) return;
+            setDialogState(() => busy = true);
+            try {
+              await DatabaseHelper.instance.updateProductBarcode(productId, code);
+              onBarcodeSaved?.call();
+              final bytes = await buildBarcodeLabelsPdf(
+                product: product,
+                barcodeValue: code,
+                copies: copies,
+                isA4Sheet: isA4Sheet,
+                settings: settings,
+              );
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              if (shareOnly) {
+                await Printing.sharePdf(
+                  bytes: bytes,
+                  filename: 'barcodes_${code}_x$copies.pdf',
+                );
+              } else {
+                await Printing.layoutPdf(
+                  name: 'barcodes_${code}_x$copies.pdf',
+                  onLayout: (_) async => bytes,
+                );
+              }
+            } finally {
+              if (ctx.mounted) setDialogState(() => busy = false);
+            }
+          }
+
+          return AlertDialog(
+            title: Text(
+              'توليد وطباعة باركود: ${product['name'] ?? ''}',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: barcodeCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'رقم الباركود',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      IconButton.filled(
+                        tooltip: 'توليد باركود جديد',
+                        style: IconButton.styleFrom(backgroundColor: const Color(0xFF0D7C66)),
+                        onPressed: busy
+                            ? null
+                            : () {
+                                setDialogState(() {
+                                  barcodeCtrl.text = generateUniqueBarcode(productId);
+                                });
+                              },
+                        icon: const Icon(Icons.autorenew),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('نوع الورق / الملصق:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: true, label: Text('ورقة A4 شبكة')),
+                      ButtonSegment(value: false, label: Text('حراري 58mm')),
+                    ],
+                    selected: {isA4Sheet},
+                    onSelectionChanged: (sel) {
+                      setDialogState(() => isA4Sheet = sel.first);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('عدد الملصقات:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      Row(
+                        children: [
+                          IconButton(
+                            onPressed: busy || copies <= 1
+                                ? null
+                                : () => setDialogState(() => copies--),
+                            icon: const Icon(Icons.remove_circle_outline),
+                          ),
+                          Text('$copies', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                          IconButton(
+                            onPressed: busy || copies >= 48
+                                ? null
+                                : () => setDialogState(() => copies++),
+                            icon: const Icon(Icons.add_circle_outline),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  Wrap(
+                    spacing: 6,
+                    children: [1, 4, 8, 12, 20].map((preset) {
+                      return ChoiceChip(
+                        label: Text('$preset'),
+                        selected: copies == preset,
+                        onSelected: (_) => setDialogState(() => copies = preset),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: busy ? null : () => Navigator.of(ctx).pop(),
+                child: const Text('إلغاء'),
+              ),
+              OutlinedButton.icon(
+                onPressed: busy ? null : () => runAction(shareOnly: true),
+                icon: const Icon(Icons.picture_as_pdf),
+                label: const Text('PDF'),
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF0369A1)),
+                onPressed: busy ? null : () => runAction(shareOnly: false),
+                icon: const Icon(Icons.print),
+                label: Text(busy ? 'جاري التوليد...' : 'طباعة'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  static Future<void> printProductBarcodeLabel(
+    BuildContext context,
+    DbRow product, {
+    VoidCallback? onBarcodeSaved,
+  }) async {
+    await showBarcodeGeneratorPrinterDialog(
+      context,
+      product,
+      onBarcodeSaved: onBarcodeSaved,
+    );
+  }
+
   static String _invoiceTitleArabic(String type) {
     switch (type) {
       case 'sale':
@@ -1835,6 +2286,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _ModuleItem('إدارة الأصناف', Icons.inventory_2, Color(0xFF0D7C66)),
     _ModuleItem('فواتير المشتريات', Icons.shopping_cart, Color(0xFFD97706)),
     _ModuleItem('العملاء والموردين', Icons.people, Color(0xFF7C3AED)),
+    _ModuleItem('حركات اليومية والصندوق', Icons.account_balance_wallet, Color(0xFF0F766E)),
     _ModuleItem('التقارير والأرباح', Icons.bar_chart, Color(0xFFDC2626)),
     _ModuleItem('النسخ الاحتياطي', Icons.settings_backup_restore, Color(0xFF334155)),
     _ModuleItem('الإعدادات', Icons.settings, Color(0xFF0369A1)),
@@ -1875,6 +2327,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       targetScreen = const PurchasesScreen();
     } else if (moduleName == 'العملاء والموردين') {
       targetScreen = const ContactsScreen();
+    } else if (moduleName == 'حركات اليومية والصندوق') {
+      targetScreen = const CashboxScreen();
     } else if (moduleName == 'التقارير والأرباح') {
       targetScreen = const ReportsScreen();
     } else if (moduleName == 'النسخ الاحتياطي') {
@@ -1972,7 +2426,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                              fontSize: 13.5,
                             ),
                           ),
                         ],
@@ -1984,6 +2438,231 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class CashboxScreen extends StatefulWidget {
+  const CashboxScreen({super.key});
+
+  @override
+  State<CashboxScreen> createState() => _CashboxScreenState();
+}
+
+class _CashboxScreenState extends State<CashboxScreen> {
+  bool _loading = true;
+  String _periodMode = 'today';
+  DateTime? _startDate;
+  DateTime? _endDate;
+
+  double _cashSales = 0.0;
+  double _receiptsTotal = 0.0;
+  double _paymentsTotal = 0.0;
+  double _expensesTotal = 0.0;
+  double _cashInBox = 0.0;
+  List<DbRow> _entries = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _applyPeriod('today');
+  }
+
+  void _applyPeriod(String mode) {
+    final now = DateTime.now();
+    DateTime? s;
+    DateTime? e;
+    if (mode == 'today') {
+      s = DateTime(now.year, now.month, now.day);
+      e = DateTime(now.year, now.month, now.day);
+    } else if (mode == 'month') {
+      s = DateTime(now.year, now.month, 1);
+      e = DateTime(now.year, now.month, now.day);
+    }
+    setState(() {
+      _periodMode = mode;
+      _startDate = s;
+      _endDate = e;
+    });
+    _loadCashbox();
+  }
+
+  Future<void> _loadCashbox() async {
+    setState(() => _loading = true);
+    final data = await DatabaseHelper.instance.getCashboxSummary(
+      startDate: _startDate,
+      endDate: _endDate,
+    ) as DbRow;
+    if (!mounted) return;
+    setState(() {
+      _cashSales = (data['cashSales'] as num?)?.toDouble() ?? 0.0;
+      _receiptsTotal = (data['receiptsTotal'] as num?)?.toDouble() ?? 0.0;
+      _paymentsTotal = (data['paymentsTotal'] as num?)?.toDouble() ?? 0.0;
+      _expensesTotal = (data['expensesTotal'] as num?)?.toDouble() ?? 0.0;
+      _cashInBox = (data['cashInBox'] as num?)?.toDouble() ?? 0.0;
+      _entries = (data['entries'] as List<DbRow>?) ?? [];
+      _loading = false;
+    });
+  }
+
+  Widget _boxStat(String title, double amount, Color color) {
+    return Card(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(color: Colors.black54, fontSize: 12)),
+            const SizedBox(height: 6),
+            Text(
+              amount.toStringAsFixed(2),
+              style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'حركات اليومية والصندوق',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF0F766E),
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            onPressed: _loadCashbox,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('اليوم'),
+                  selected: _periodMode == 'today',
+                  onSelected: (_) => _applyPeriod('today'),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('هذا الشهر'),
+                  selected: _periodMode == 'month',
+                  onSelected: (_) => _applyPeriod('month'),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('الكل'),
+                  selected: _periodMode == 'all',
+                  onSelected: (_) => _applyPeriod('all'),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                    padding: const EdgeInsets.all(12),
+                    children: [
+                      Card(
+                        color: const Color(0xFF0F766E),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'المتوفر النقدي الفعلي في الصندوق',
+                                style: TextStyle(color: Colors.white70, fontSize: 13),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _cashInBox.toStringAsFixed(2),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 24,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      GridView.count(
+                        crossAxisCount: 2,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 1.65,
+                        children: [
+                          _boxStat('مبيعات نقدية', _cashSales, const Color(0xFF1545B5)),
+                          _boxStat('سندات قبض', _receiptsTotal, const Color(0xFF0D7C66)),
+                          _boxStat('سندات صرف', _paymentsTotal, const Color(0xFFD97706)),
+                          _boxStat('المصروفات', _expensesTotal, const Color(0xFFDC2626)),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'سجل الحركات النقدية',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      const SizedBox(height: 8),
+                      if (_entries.isEmpty)
+                        const Card(
+                          child: Padding(
+                            padding: EdgeInsets.all(14),
+                            child: Text('لا توجد حركات نقدية مسجلة في هذه الفترة'),
+                          ),
+                        )
+                      else
+                        ..._entries.map((e) {
+                          final bool inc = e['incoming'] == true;
+                          final double amt = (e['amount'] as num?)?.toDouble() ?? 0.0;
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              dense: true,
+                              leading: CircleAvatar(
+                                backgroundColor: (inc ? Colors.green : Colors.red).withAlpha(25),
+                                child: Icon(
+                                  inc ? Icons.arrow_downward : Icons.arrow_upward,
+                                  color: inc ? Colors.green[800] : Colors.red[700],
+                                ),
+                              ),
+                              title: Text(
+                                e['title'].toString(),
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text((e['date'] ?? '').toString().replaceFirst('T', ' ').split('.').first),
+                              trailing: Text(
+                                '${inc ? '+' : '-'}${amt.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: inc ? Colors.green[800] : Colors.red[700],
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -3989,9 +4668,11 @@ class PosScreen extends StatefulWidget {
 
 class _PosScreenState extends State<PosScreen> {
   List<DbRow> _products = [];
+  List<DbRow> _categories = [];
   List<DbRow> _customers = [];
   List<DbRow> _cart = [];
   int? _selectedCustomerId;
+  int? _selectedCategoryId;
   String _paymentMethod = 'نقدي';
   String _search = '';
   bool _loading = true;
@@ -4054,10 +4735,12 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _loadData() async {
     setState(() => _loading = true);
     final rows = await DatabaseHelper.instance.queryAllProducts();
+    final cats = await DatabaseHelper.instance.queryAllCategories();
     final customers = await DatabaseHelper.instance.queryCustomers();
     if (!mounted) return;
     setState(() {
       _products = rows;
+      _categories = cats;
       _customers = customers;
       _recalculateCartPrices();
       _loading = false;
@@ -4066,8 +4749,11 @@ class _PosScreenState extends State<PosScreen> {
 
   List<DbRow> get _filteredProducts {
     final q = _search.trim().toLowerCase();
-    if (q.isEmpty) return _products;
     return _products.where((item) {
+      if (_selectedCategoryId != null && item['category_id'] != _selectedCategoryId) {
+        return false;
+      }
+      if (q.isEmpty) return true;
       final name = (item['name'] ?? '').toString().toLowerCase();
       final barcode = (item['barcode'] ?? '').toString().toLowerCase();
       return name.contains(q) || barcode.contains(q);
@@ -4283,8 +4969,33 @@ class _PosScreenState extends State<PosScreen> {
               },
             ),
           ),
+          if (_categories.isNotEmpty)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('الكل'),
+                    selected: _selectedCategoryId == null,
+                    onSelected: (_) => setState(() => _selectedCategoryId = null),
+                  ),
+                  ..._categories.map((cat) {
+                    final int cid = cat['id'] as int;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text((cat['name'] ?? '').toString()),
+                        selected: _selectedCategoryId == cid,
+                        onSelected: (_) => setState(() => _selectedCategoryId = cid),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
             child: Row(
               children: [
                 Expanded(
@@ -4336,7 +5047,7 @@ class _PosScreenState extends State<PosScreen> {
                                 (pRow['name'] ?? '').toString(),
                                 style: const TextStyle(fontWeight: FontWeight.bold),
                               ),
-                              subtitle: Text('المتوفر: $qty • فئة: $tierLabel'),
+                              subtitle: Text('المتوفر: $qty • ${pRow['category_name'] ?? 'عام'}'),
                               trailing: Text(
                                 price.toStringAsFixed(2),
                                 style: const TextStyle(
@@ -4482,6 +5193,8 @@ class ProductsScreen extends StatefulWidget {
 
 class _ProductsScreenState extends State<ProductsScreen> {
   List<DbRow> _allProducts = [];
+  List<DbRow> _categories = [];
+  int? _selectedCategoryId;
   String _searchQuery = '';
   bool _loading = true;
 
@@ -4502,11 +5215,103 @@ class _ProductsScreenState extends State<ProductsScreen> {
   Future<void> _loadProducts() async {
     setState(() => _loading = true);
     final rows = await DatabaseHelper.instance.queryAllProducts();
+    final cats = await DatabaseHelper.instance.queryAllCategories();
     if (!mounted) return;
     setState(() {
       _allProducts = rows;
+      _categories = cats;
+      if (_selectedCategoryId != null &&
+          !cats.any((c) => c['id'] == _selectedCategoryId)) {
+        _selectedCategoryId = null;
+      }
       _loading = false;
     });
+  }
+
+  Future<void> _openCategoriesManagerDialog() async {
+    final nameCtrl = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          Future<void> refreshCats() async {
+            final updated = await DatabaseHelper.instance.queryAllCategories();
+            setDialogState(() => _categories = updated);
+          }
+
+          return AlertDialog(
+            title: const Text(
+              'إدارة التصنيفات',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: nameCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'اسم تصنيف جديد',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF0D7C66)),
+                          onPressed: () async {
+                            final n = nameCtrl.text.trim();
+                            if (n.isEmpty) return;
+                            await DatabaseHelper.instance.insertCategory(n);
+                            nameCtrl.clear();
+                            await refreshCats();
+                          },
+                          child: const Text('إضافة'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ..._categories.map((cat) {
+                      final int cid = cat['id'] as int;
+                      final String cname = (cat['name'] ?? '').toString();
+                      return ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.label_outline, color: Color(0xFF0D7C66)),
+                        title: Text(cname, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        trailing: cname == 'عام'
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                                onPressed: () async {
+                                  await DatabaseHelper.instance.deleteCategory(cid);
+                                  await refreshCats();
+                                },
+                              ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('إغلاق'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    await _loadProducts();
   }
 
   Future<void> _exportProductsCsv() async {
@@ -4515,6 +5320,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         'المعرف',
         'الباركود',
         'اسم الصنف',
+        'التصنيف',
         'سعر الشراء',
         'سعر التجزئة',
         'سعر الجملة',
@@ -4526,6 +5332,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
             pRow['id'] ?? '',
             pRow['barcode'] ?? '',
             pRow['name'] ?? '',
+            pRow['category_name'] ?? 'عام',
             ((pRow['purchase_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
             ((pRow['sale_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
             ((pRow['wholesale_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
@@ -4544,8 +5351,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   List<DbRow> get _filteredProducts {
     final q = _searchQuery.trim().toLowerCase();
-    if (q.isEmpty) return _allProducts;
     return _allProducts.where((item) {
+      if (_selectedCategoryId != null && item['category_id'] != _selectedCategoryId) {
+        return false;
+      }
+      if (q.isEmpty) return true;
       final name = (item['name'] ?? '').toString().toLowerCase();
       final barcode = (item['barcode'] ?? '').toString().toLowerCase();
       return name.contains(q) || barcode.contains(q);
@@ -4572,6 +5382,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   Future<void> _openProductDialog({DbRow? existingProduct}) async {
     final isEditing = existingProduct != null;
+    int? chosenCategoryId = existingProduct?['category_id'] as int?;
+    if (chosenCategoryId == null && _categories.isNotEmpty) {
+      chosenCategoryId = _categories.first['id'] as int;
+    }
+
     final nameController = TextEditingController(
       text: existingProduct?['name']?.toString() ?? '',
     );
@@ -4600,181 +5415,202 @@ class _ProductsScreenState extends State<ProductsScreen> {
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) {
-        return AlertDialog(
-          title: Text(
-            isEditing ? 'تعديل الصنف' : 'إضافة صنف جديد',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم الصنف *',
-                    border: OutlineInputBorder(),
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: Text(
+              isEditing ? 'تعديل الصنف' : 'إضافة صنف جديد',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'اسم الصنف *',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: barcodeController,
-                        decoration: const InputDecoration(
-                          labelText: 'الباركود',
-                          border: OutlineInputBorder(),
-                        ),
+                  const SizedBox(height: 10),
+                  if (_categories.isNotEmpty)
+                    DropdownButtonFormField<int?>(
+                      value: chosenCategoryId,
+                      decoration: const InputDecoration(
+                        labelText: 'التصنيف',
+                        border: OutlineInputBorder(),
                       ),
+                      items: _categories
+                          .map(
+                            (c) => DropdownMenuItem<int?>(
+                              value: c['id'] as int,
+                              child: Text((c['name'] ?? '').toString()),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) => setDialogState(() => chosenCategoryId = v),
                     ),
-                    IconButton(
-                      tooltip: 'مسح الباركود بالكاميرا',
-                      onPressed: () async {
-                        final scanned = await Navigator.of(ctx).push<String>(
-                          MaterialPageRoute(
-                            builder: (_) => const BarcodeScannerScreen(title: 'قراءة باركود الصنف'),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: barcodeController,
+                          decoration: const InputDecoration(
+                            labelText: 'الباركود',
+                            border: OutlineInputBorder(),
                           ),
-                        );
-                        if (scanned != null && scanned.isNotEmpty) {
-                          barcodeController.text = scanned;
-                        }
-                      },
-                      icon: const Icon(Icons.qr_code_scanner, size: 26),
-                    ),
-                    IconButton(
-                      tooltip: 'توليد باركود تلقائي',
-                      onPressed: () {
-                        barcodeController.text = _generateBarcode();
-                      },
-                      icon: const Icon(Icons.qr_code_2, size: 26),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: purchaseController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'سعر الشراء',
-                          border: OutlineInputBorder(),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: saleController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'سعر البيع (تجزئة) *',
-                          border: OutlineInputBorder(),
+                      IconButton(
+                        tooltip: 'مسح الباركود بالكاميرا',
+                        onPressed: () async {
+                          final scanned = await Navigator.of(ctx).push<String>(
+                            MaterialPageRoute(
+                              builder: (_) => const BarcodeScannerScreen(title: 'قراءة باركود الصنف'),
+                            ),
+                          );
+                          if (scanned != null && scanned.isNotEmpty) {
+                            barcodeController.text = scanned;
+                          }
+                        },
+                        icon: const Icon(Icons.qr_code_scanner, size: 26),
+                      ),
+                      IconButton(
+                        tooltip: 'توليد باركود تلقائي',
+                        onPressed: () {
+                          barcodeController.text = _generateBarcode();
+                        },
+                        icon: const Icon(Icons.qr_code_2, size: 26),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: purchaseController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'سعر الشراء',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: wholesaleController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'سعر الجملة',
-                          border: OutlineInputBorder(),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: saleController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'سعر البيع (تجزئة) *',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: specialController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'سعر خاص',
-                          border: OutlineInputBorder(),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: wholesaleController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'سعر الجملة',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: qtyController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'الكمية',
-                          border: OutlineInputBorder(),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: specialController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'سعر خاص',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: minStockController,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'الحد الأدنى',
-                          border: OutlineInputBorder(),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: qtyController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'الكمية',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: minStockController,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'الحد الأدنى',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('إلغاء'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final name = nameController.text.trim();
+                  final salePrice = double.tryParse(saleController.text.trim()) ?? 0.0;
+                  if (name.isEmpty || salePrice <= 0) {
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('يرجى إدخال اسم الصنف وسعر بيع صحيح')),
+                    );
+                    return;
+                  }
+
+                  final barcodeText = barcodeController.text.trim();
+                  final row = <String, dynamic>{
+                    'name': name,
+                    'category_id': chosenCategoryId,
+                    'barcode': barcodeText.isEmpty ? null : barcodeText,
+                    'purchase_price': double.tryParse(purchaseController.text.trim()) ?? 0.0,
+                    'sale_price': salePrice,
+                    'wholesale_price': double.tryParse(wholesaleController.text.trim()) ?? 0.0,
+                    'special_price': double.tryParse(specialController.text.trim()) ?? 0.0,
+                    'stock_quantity': double.tryParse(qtyController.text.trim()) ?? 0.0,
+                    'min_stock': double.tryParse(minStockController.text.trim()) ?? 0.0,
+                    'is_active': 1,
+                  };
+
+                  if (isEditing) {
+                    row['id'] = existingProduct['id'];
+                    await DatabaseHelper.instance.updateProduct(row);
+                  } else {
+                    await DatabaseHelper.instance.insertProduct(row);
+                  }
+
+                  if (ctx.mounted) {
+                    Navigator.of(ctx).pop(true);
+                  }
+                },
+                child: Text(isEditing ? 'تحديث' : 'حفظ'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final name = nameController.text.trim();
-                final salePrice = double.tryParse(saleController.text.trim()) ?? 0.0;
-                if (name.isEmpty || salePrice <= 0) {
-                  ScaffoldMessenger.of(ctx).showSnackBar(
-                    const SnackBar(content: Text('يرجى إدخال اسم الصنف وسعر بيع صحيح')),
-                  );
-                  return;
-                }
-
-                final barcodeText = barcodeController.text.trim();
-                final row = <String, dynamic>{
-                  'name': name,
-                  'barcode': barcodeText.isEmpty ? null : barcodeText,
-                  'purchase_price': double.tryParse(purchaseController.text.trim()) ?? 0.0,
-                  'sale_price': salePrice,
-                  'wholesale_price': double.tryParse(wholesaleController.text.trim()) ?? 0.0,
-                  'special_price': double.tryParse(specialController.text.trim()) ?? 0.0,
-                  'stock_quantity': double.tryParse(qtyController.text.trim()) ?? 0.0,
-                  'min_stock': double.tryParse(minStockController.text.trim()) ?? 0.0,
-                  'is_active': 1,
-                };
-
-                if (isEditing) {
-                  row['id'] = existingProduct['id'];
-                  await DatabaseHelper.instance.updateProduct(row);
-                } else {
-                  await DatabaseHelper.instance.insertProduct(row);
-                }
-
-                if (ctx.mounted) {
-                  Navigator.of(ctx).pop(true);
-                }
-              },
-              child: Text(isEditing ? 'تحديث' : 'حفظ'),
-            ),
-          ],
         );
       },
     );
@@ -4809,6 +5645,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
+            tooltip: 'إدارة التصنيفات',
+            onPressed: _openCategoriesManagerDialog,
+            icon: const Icon(Icons.category_outlined),
+          ),
+          IconButton(
             tooltip: 'تصدير الأصناف CSV',
             onPressed: _allProducts.isEmpty ? null : _exportProductsCsv,
             icon: const Icon(Icons.table_view),
@@ -4824,6 +5665,31 @@ class _ProductsScreenState extends State<ProductsScreen> {
       ),
       body: Column(
         children: [
+          if (_categories.isNotEmpty)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('الكل'),
+                    selected: _selectedCategoryId == null,
+                    onSelected: (_) => setState(() => _selectedCategoryId = null),
+                  ),
+                  ..._categories.map((cat) {
+                    final int cid = cat['id'] as int;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text((cat['name'] ?? '').toString()),
+                        selected: _selectedCategoryId == cid,
+                        onSelected: (_) => setState(() => _selectedCategoryId = cid),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
@@ -4873,6 +5739,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                           final minStock = (pRow['min_stock'] as num?)?.toDouble() ?? 0.0;
                           final isLow = qty <= minStock;
                           final barcode = pRow['barcode']?.toString();
+                          final catName = (pRow['category_name'] ?? 'عام').toString();
                           final wholesale = (pRow['wholesale_price'] as num?)?.toDouble() ?? 0.0;
                           final special = (pRow['special_price'] as num?)?.toDouble() ?? 0.0;
 
@@ -4888,7 +5755,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                 style: const TextStyle(fontWeight: FontWeight.bold),
                               ),
                               subtitle: Text(
-                                'تجزئة: ${pRow['sale_price']}'
+                                'تصنيف: $catName • تجزئة: ${pRow['sale_price']}'
                                 '${wholesale > 0 ? ' • جملة: $wholesale' : ''}'
                                 '${special > 0 ? ' • خاص: $special' : ''}'
                                 ' • الكمية: $qty'
@@ -4913,6 +5780,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                         ),
                                       ),
                                     ),
+                                  IconButton(
+                                    tooltip: 'توليد وطباعة الباركود',
+                                    icon: const Icon(Icons.qr_code, color: Color(0xFF0369A1)),
+                                    onPressed: () => ThermalPdfService.printProductBarcodeLabel(
+                                      context,
+                                      pRow,
+                                      onBarcodeSaved: _loadProducts,
+                                    ),
+                                  ),
                                   IconButton(
                                     icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
                                     onPressed: () => _confirmDelete(pRow),
