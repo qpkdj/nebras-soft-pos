@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +23,433 @@ typedef DbRow = Map<String, dynamic>;
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NebrasPosApp());
+}
+
+class DeviceLicenseService {
+  // غيّر هذا المفتاح السري إلى نص سري خاص بك ولا تشاركه مع أي مستخدم
+  static const String appSecretSalt = 'NEBRAS_SOFT_POS_2026_SECRET_KEY_#967';
+  static const String developerWhatsappUrl = 'https://wa.me/967735114406';
+
+  static String normalizePhone(String phone) {
+    return phone.replaceAll(RegExp(r'[^0-9+]'), '').trim();
+  }
+
+  static Future<String> getOrCreateDeviceFingerprint() async {
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    String rawId = (settings['device_id'] ?? '').trim();
+    if (rawId.isEmpty) {
+      rawId = 'NS-${DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase()}';
+      await DatabaseHelper.instance.saveSettingsMap({'device_id': rawId});
+    }
+    final digestBytes = sha256.convert(
+      utf8.encode('$appSecretSalt|FP|$rawId|${Platform.operatingSystem}'),
+    );
+    final hex = digestBytes.toString().toUpperCase();
+    return 'NSFP-${hex.substring(0, 6)}-${hex.substring(6, 12)}-${hex.substring(12, 18)}';
+  }
+
+  static String generateExpectedSerial({
+    required String fingerprint,
+    required String phone,
+  }) {
+    final cleanFp = fingerprint.trim().toUpperCase();
+    final cleanPhone = normalizePhone(phone);
+    final payload = '$appSecretSalt|SERIAL|$cleanFp|$cleanPhone';
+    final hashHex = sha256.convert(utf8.encode(payload)).toString().toUpperCase();
+    return 'NSACT-${hashHex.substring(0, 5)}-${hashHex.substring(5, 10)}-${hashHex.substring(10, 15)}';
+  }
+
+  static Future<bool> isDeviceActivated() async {
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    final savedFp = (settings['licensed_fingerprint'] ?? '').trim();
+    final savedPhone = (settings['licensed_phone'] ?? '').trim();
+    final savedSerial = (settings['licensed_serial'] ?? '').trim().toUpperCase();
+    final usedSerialsRaw = (settings['used_serials_json'] ?? '{}').trim();
+
+    if (savedFp.isEmpty || savedPhone.isEmpty || savedSerial.isEmpty) {
+      return false;
+    }
+
+    final currentFp = await getOrCreateDeviceFingerprint();
+    if (savedFp != currentFp) {
+      return false;
+    }
+
+    final expected = generateExpectedSerial(
+      fingerprint: currentFp,
+      phone: savedPhone,
+    );
+    if (savedSerial != expected) {
+      return false;
+    }
+
+    try {
+      final decoded = jsonDecode(usedSerialsRaw);
+      if (decoded is Map<String, dynamic>) {
+        final ownerFp = decoded[savedSerial]?.toString() ?? '';
+        if (ownerFp.isNotEmpty && ownerFp != currentFp) {
+          return false;
+        }
+      }
+    } catch (_) {}
+
+    return true;
+  }
+
+  static Future> activateDevice({
+    required String userName,
+    required String phone,
+    required String serialInput,
+  }) async {
+    final cleanName = userName.trim();
+    final cleanPhone = normalizePhone(phone);
+    final cleanSerial = serialInput.trim().toUpperCase();
+
+    if (cleanName.isEmpty) {
+      return {'ok': false, 'reason': 'يرجى إدخال الاسم الكامل.'};
+    }
+    if (cleanPhone.length < 6) {
+      return {'ok': false, 'reason': 'يرجى إدخال رقم هاتف صحيح.'};
+    }
+    if (cleanSerial.isEmpty) {
+      return {'ok': false, 'reason': 'يرجى إدخال سيريال التنشيط.'};
+    }
+
+    final currentFp = await getOrCreateDeviceFingerprint();
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+
+    final Map<String, String> usedMap = {};
+    final rawUsed = (settings['used_serials_json'] ?? '').trim();
+    if (rawUsed.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawUsed);
+        if (decoded is Map) {
+          decoded.forEach((k, v) {
+            usedMap[k.toString().toUpperCase()] = v.toString();
+          });
+        }
+      } catch (_) {}
+    }
+
+    if (usedMap.containsKey(cleanSerial) && usedMap[cleanSerial] != currentFp) {
+      return {
+        'ok': false,
+        'reason': 'هذا السيريال مستخدم مسبقاً على جهاز آخر ولا يمكن تكراره.',
+      };
+    }
+
+    final expectedSerial = generateExpectedSerial(
+      fingerprint: currentFp,
+      phone: cleanPhone,
+    );
+
+    if (cleanSerial != expectedSerial) {
+      return {
+        'ok': false,
+        'reason': 'السيريال غير مطابق لبصمة هذا الجهاز أو رقم الهاتف المدخل.',
+      };
+    }
+
+    usedMap[cleanSerial] = currentFp;
+
+    await DatabaseHelper.instance.saveSettingsMap({
+      'licensed_user_name': cleanName,
+      'licensed_phone': cleanPhone,
+      'licensed_fingerprint': currentFp,
+      'licensed_serial': cleanSerial,
+      'used_serials_json': jsonEncode(usedMap),
+    });
+
+    return {'ok': true, 'reason': 'تم تفعيل التطبيق بنجاح على هذا الجهاز.'};
+  }
+}
+
+class ActivationGateScreen extends StatefulWidget {
+  final Widget childWhenActivated;
+
+  const ActivationGateScreen({
+    super.key,
+    required this.childWhenActivated,
+  });
+
+  @override
+  State<ActivationGateScreen> createState() => _ActivationGateScreenState();
+}
+
+class _ActivationGateScreenState extends State<ActivationGateScreen> {
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _phoneCtrl = TextEditingController();
+  final TextEditingController _serialCtrl = TextEditingController();
+
+  String _fingerprint = 'جاري توليد بصمة الجهاز...';
+  bool _checkingInitial = true;
+  bool _activated = false;
+  bool _submitting = false;
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    _initStateData();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _serialCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initStateData() async {
+    final fp = await DeviceLicenseService.getOrCreateDeviceFingerprint();
+    final isAct = await DeviceLicenseService.isDeviceActivated();
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    if (!mounted) return;
+    _nameCtrl.text = settings['licensed_user_name'] ?? '';
+    _phoneCtrl.text = settings['licensed_phone'] ?? '';
+    setState(() {
+      _fingerprint = fp;
+      _activated = isAct;
+      _checkingInitial = false;
+    });
+  }
+
+  Future<void> _copyFingerprint() async {
+    await Clipboard.setData(ClipboardData(text: _fingerprint));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم نسخ بصمة الجهاز إلى الحافظة')),
+    );
+  }
+
+  Future<void> _sendRequestToDeveloperWhatsapp() async {
+    final name = _nameCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    if (name.isEmpty || phone.isEmpty) {
+      setState(() {
+        _errorText = 'يرجى كتابة الاسم ورقم الهاتف أولاً قبل إرسال الطلب للمطور.';
+      });
+      return;
+    }
+
+    final msg = Uri.encodeComponent(
+      'طلب تفعيل تطبيق Nebras SofT Pos\n'
+      'الاسم: $name\n'
+      'رقم الهاتف: $phone\n'
+      'بصمة الجهاز: $_fingerprint',
+    );
+    final url = '${DeviceLicenseService.developerWhatsappUrl}?text=$msg';
+    bool opened = false;
+    try {
+      opened = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+
+    if (!opened) {
+      await Clipboard.setData(
+        ClipboardData(
+          text: 'الاسم: $name\nرقم الهاتف: $phone\nبصمة الجهاز: $_fingerprint',
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          opened
+              ? 'جاري فتح واتساب لإرسال بيانات التفعيل للمطور...'
+              : 'تعذر فتح واتساب مباشرة، تم نسخ بيانات الطلب إلى الحافظة',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _submitActivation() async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _errorText = null;
+    });
+
+    final res = await DeviceLicenseService.activateDevice(
+      userName: _nameCtrl.text,
+      phone: _phoneCtrl.text,
+      serialInput: _serialCtrl.text,
+    );
+
+    if (!mounted) return;
+    setState(() => _submitting = false);
+
+    if (res['ok'] == true) {
+      setState(() => _activated = true);
+    } else {
+      setState(() {
+        _errorText = (res['reason'] ?? 'تعذر التفعيل').toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checkingInitial) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_activated) {
+      return widget.childWhenActivated;
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'تسجيل الدخول وتفعيل التطبيق',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF0F2C7E),
+        centerTitle: true,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'بيانات المستخدم',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'الاسم الكامل *',
+                        prefixIcon: Icon(Icons.person_outline),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'رقم الهاتف *',
+                        prefixIcon: Icon(Icons.phone_android),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'بصمة الجهاز (Device ID)',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.black26),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SelectableText(
+                              _fingerprint,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'نسخ بصمة الجهاز',
+                            onPressed: _copyFingerprint,
+                            icon: const Icon(Icons.copy, color: Color(0xFF0F2C7E)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF16A34A),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      onPressed: _sendRequestToDeveloperWhatsapp,
+                      icon: const Icon(Icons.chat),
+                      label: const Text(
+                        'إرسال البيانات وبصمة الجهاز واتساب للمطور',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'إدخال سيريال التنشيط الخاص بالجهاز',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _serialCtrl,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'سيريال التنشيط *',
+                        prefixIcon: Icon(Icons.vpn_key_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (_errorText != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        _errorText!,
+                        style: const TextStyle(
+                          color: Color(0xFFDC2626),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      height: 48,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF0F2C7E),
+                        ),
+                        onPressed: _submitting ? null : _submitActivation,
+                        icon: const Icon(Icons.verified_user),
+                        label: Text(_submitting ? 'جاري التحقق...' : 'تفعيل ودخول التطبيق'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class ForceUpdateGuardService {
@@ -399,6 +827,11 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'force_update_message', 'value': ''});
     await db.insert('settings', {'key': 'update_download_url', 'value': ''});
     await db.insert('settings', {'key': 'update_feed_url', 'value': ''});
+    await db.insert('settings', {'key': 'licensed_user_name', 'value': ''});
+    await db.insert('settings', {'key': 'licensed_phone', 'value': ''});
+    await db.insert('settings', {'key': 'licensed_fingerprint', 'value': ''});
+    await db.insert('settings', {'key': 'licensed_serial', 'value': ''});
+    await db.insert('settings', {'key': 'used_serials_json', 'value': '{}'});
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -492,6 +925,11 @@ class DatabaseHelper {
       'force_update_message': '',
       'update_download_url': '',
       'update_feed_url': '',
+      'licensed_user_name': '',
+      'licensed_phone': '',
+      'licensed_fingerprint': '',
+      'licensed_serial': '',
+      'used_serials_json': '{}',
     };
     for (final r in rows) {
       final k = r['key']?.toString();
@@ -2628,7 +3066,9 @@ class NebrasPosApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: const Color(0xFFF4F6FA),
       ),
-      home: const DashboardScreen(),
+      home: const ActivationGateScreen(
+        childWhenActivated: DashboardScreen(),
+      ),
     );
   }
 }
