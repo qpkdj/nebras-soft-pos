@@ -13,6 +13,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 typedef DbRow = Map<String, dynamic>;
 
@@ -2446,13 +2447,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required String targetUrl,
     required String feedbackMessage,
   }) async {
-    await Clipboard.setData(ClipboardData(text: targetUrl));
+    final uri = Uri.parse(targetUrl);
+    bool opened = false;
+    try {
+      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+
+    if (!opened) {
+      await Clipboard.setData(ClipboardData(text: targetUrl));
+    }
+
     if (dialogContext.mounted) {
       Navigator.of(dialogContext).pop();
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(feedbackMessage)),
+      SnackBar(
+        content: Text(
+          opened
+              ? feedbackMessage
+              : 'تعذر فتح التطبيق مباشرة، تم نسخ الرابط إلى الحافظة',
+        ),
+      ),
     );
   }
 
@@ -2477,7 +2495,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () => _triggerChannelAction(
                   dialogContext: ctx,
                   targetUrl: _whatsappUrl,
-                  feedbackMessage: 'تم تجهيز رابط واتساب أعمال للمطور',
+                  feedbackMessage: 'جاري فتح واتساب أعمال للمطور...',
                 ),
               ),
             ),
@@ -2493,7 +2511,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () => _triggerChannelAction(
                   dialogContext: ctx,
                   targetUrl: _telegramUrl,
-                  feedbackMessage: 'تم تجهيز قناة مراسلة المطور على تليجرام',
+                  feedbackMessage: 'جاري فتح تليجرام للمطور...',
                 ),
               ),
             ),
@@ -2509,7 +2527,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () => _triggerChannelAction(
                   dialogContext: ctx,
                   targetUrl: _youtubeUrl,
-                  feedbackMessage: 'تم تجهيز رابط قناة المطور على يوتيوب',
+                  feedbackMessage: 'جاري فتح قناة المطور على يوتيوب...',
                 ),
               ),
             ),
@@ -2528,7 +2546,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () => _triggerChannelAction(
                   dialogContext: ctx,
                   targetUrl: _githubUrl,
-                  feedbackMessage: 'تم تجهيز رابط منصة GitHub للمطور',
+                  feedbackMessage: 'جاري فتح صفحة المطور على GitHub...',
                 ),
               ),
             ),
