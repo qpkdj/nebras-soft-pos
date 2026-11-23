@@ -54,56 +54,37 @@ jobs:
           if manifest_p.exists():
               mtxt = manifest_p.read_text(encoding="utf-8")
 
-              permissions_block = """
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-
-    <!-- Camera -->
-    <uses-permission android:name="android.permission.CAMERA" />
-
-    <!-- Storage & Media -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-
-    <!-- Contacts -->
-    <uses-permission android:name="android.permission.READ_CONTACTS" />
-    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
-
-    <!-- Phone & Calls -->
-    <uses-permission android:name="android.permission.CALL_PHONE" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-
-    <!-- Call Log -->
-    <uses-permission android:name="android.permission.READ_CALL_LOG" />
-    <uses-permission android:name="android.permission.WRITE_CALL_LOG" />
-
-    <!-- SMS -->
-    <uses-permission android:name="android.permission.SEND_SMS" />
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
-
-    <!-- Location -->
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-
-    <!-- Nearby Devices & Bluetooth -->
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />
-"""
-              if "android.permission.READ_CONTACTS" not in mtxt:
-                  mtxt = re.sub(
-                      r"(\s*<application\b)",
-                      permissions_block + r"\1",
-                      mtxt,
-                      count=1,
-                  )
-              manifest_p.write_text(mtxt, encoding="utf-8")
+              perms = [
+                  '<uses-feature android:name="android.hardware.camera" android:required="false" />',
+                  '<uses-permission android:name="android.permission.CAMERA" />',
+                  '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
+                  '<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
+                  '<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />',
+                  '<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />',
+                  '<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />',
+                  '<uses-permission android:name="android.permission.READ_CONTACTS" />',
+                  '<uses-permission android:name="android.permission.WRITE_CONTACTS" />',
+                  '<uses-permission android:name="android.permission.CALL_PHONE" />',
+                  '<uses-permission android:name="android.permission.READ_PHONE_STATE" />',
+                  '<uses-permission android:name="android.permission.READ_CALL_LOG" />',
+                  '<uses-permission android:name="android.permission.WRITE_CALL_LOG" />',
+                  '<uses-permission android:name="android.permission.SEND_SMS" />',
+                  '<uses-permission android:name="android.permission.READ_SMS" />',
+                  '<uses-permission android:name="android.permission.RECEIVE_SMS" />',
+                  '<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />',
+                  '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />',
+                  '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
+                  '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
+                  '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
+                  '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
+                  '<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />',
+                  '<uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" />',
+              ]
+              missing_perms = [p_line for p_line in perms if p_line not in mtxt]
+              if missing_perms:
+                  perms_str = "\n    ".join(missing_perms) + "\n"
+                  mtxt = re.sub(r"(\s*<application\b)", "\n    " + perms_str + r"\1", mtxt, count=1)
+                  manifest_p.write_text(mtxt, encoding="utf-8")
 
           settings_p = Path("android/settings.gradle.kts")
           if settings_p.exists():
@@ -112,15 +93,15 @@ jobs:
               if "mavenCentral()" not in txt:
                   txt = txt.replace("gradlePluginPortal()", "gradlePluginPortal()\n        mavenCentral()")
 
-              hook = """
-          gradle.beforeProject {
-              afterEvaluate {
-                  plugins.withId("com.android.library") {
-                      extensions.findByType<com.android.build.gradle.LibraryExtension>()?.compileSdk = 36
-                  }
-              }
-          }
-          """
+              hook = (
+                  "gradle.beforeProject {\n"
+                  "    afterEvaluate {\n"
+                  "        plugins.withId(\"com.android.library\") {\n"
+                  "            extensions.findByType<com.android.build.gradle.LibraryExtension>()?.compileSdk = 36\n"
+                  "        }\n"
+                  "    }\n"
+                  "}\n"
+              )
               if "gradle.beforeProject" not in txt:
                   txt = hook + "\n" + txt
 
@@ -149,17 +130,12 @@ jobs:
                   )
 
                   if "signingConfigs" not in gtxt:
-                      gtxt = re.sub(
-                          r"(android\s*\{)",
-                          r"\1\n" + signing_cfg,
-                          gtxt,
-                          count=1,
-                      )
+                      gtxt = re.sub(r"(android\s*\{)", r"\1\n" + signing_cfg, gtxt, count=1)
 
-                  if "signingConfig = signingConfigs.getByName(\"release\")" not in gtxt:
+                  if 'signingConfig = signingConfigs.getByName("release")' not in gtxt:
                       gtxt = re.sub(
-                          r"(getByName\(\"release\"\)\s*\{)",
-                          r"\1\n                signingConfig = signingConfigs.getByName(\"release\")",
+                          r'(getByName\("release"\)\s*\{)',
+                          r'\1\n                signingConfig = signingConfigs.getByName("release")',
                           gtxt,
                           count=1,
                       )
