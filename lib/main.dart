@@ -1126,11 +1126,13 @@ class BarcodeScannerScreen extends StatefulWidget {
   State<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
 }
 
-class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
+class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
+    with WidgetsBindingObserver {
   final MobileScannerController _controller = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     facing: CameraFacing.back,
     torchEnabled: false,
+    autoStart: false,
   );
   bool _handled = false;
   bool _checkingPermission = true;
@@ -1139,12 +1141,29 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initCameraWithPermission();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_permissionGranted || _handled) return;
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      _controller.stop().catchError((_) {});
+    } else if (state == AppLifecycleState.resumed) {
+      Future.delayed(const Duration(milliseconds: 250), () {
+        if (mounted && _permissionGranted && !_handled) {
+          _controller.start().catchError((_) {});
+        }
+      });
+    }
   }
 
   Future<void> _initCameraWithPermission() async {
     setState(() => _checkingPermission = true);
-    final granted = await AppPermissionsService.ensureCameraPermission(openSettingsIfDenied: false);
+    final granted = await AppPermissionsService.ensureCameraPermission(
+      openSettingsIfDenied: false,
+    );
     if (!mounted) return;
     setState(() {
       _permissionGranted = granted;
@@ -1152,13 +1171,51 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     });
     if (granted) {
       try {
+        await _controller.stop();
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      try {
         await _controller.start();
       } catch (_) {}
     }
   }
 
+  Future<void> _enterBarcodeManually() async {
+    final ctrl = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إدخال الباركود يدوياً', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'اكتب أو الصق رقم الباركود',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('تأكيد'),
+          ),
+        ],
+      ),
+    );
+    if (code != null && code.isNotEmpty && mounted && !_handled) {
+      _handled = true;
+      Navigator.of(context).pop(code);
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
   }
@@ -1186,6 +1243,11 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         backgroundColor: const Color(0xFF0F2C7E),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          IconButton(
+            tooltip: 'إدخال الباركود يدوياً',
+            icon: const Icon(Icons.keyboard),
+            onPressed: _enterBarcodeManually,
+          ),
           IconButton(
             tooltip: 'تشغيل/إطفاء الفلاش',
             icon: const Icon(Icons.flash_on),
@@ -1246,6 +1308,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                       controller: _controller,
                       onDetect: _onDetect,
                       errorBuilder: (context, error, child) {
+                        final errDetail = error.errorDetails?.message ?? error.errorCode.name;
                         return Center(
                           child: Padding(
                             padding: const EdgeInsets.all(20),
@@ -1259,16 +1322,23 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(fontSize: 14),
                                 ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'السبب: $errDetail',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                ),
                                 const SizedBox(height: 14),
                                 FilledButton.icon(
-                                  onPressed: () async {
-                                    try {
-                                      await _controller.stop();
-                                      await _controller.start();
-                                    } catch (_) {}
-                                  },
+                                  onPressed: _initCameraWithPermission,
                                   icon: const Icon(Icons.refresh),
                                   label: const Text('إعادة تشغيل الكاميرا'),
+                                ),
+                                const SizedBox(height: 8),
+                                OutlinedButton.icon(
+                                  onPressed: _enterBarcodeManually,
+                                  icon: const Icon(Icons.keyboard),
+                                  label: const Text('إدخال الباركود يدوياً'),
                                 ),
                               ],
                             ),
