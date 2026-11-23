@@ -54,9 +54,9 @@ jobs:
             sed -i -E 's/(targetSdkVersion)[[:space:]]+[^[:space:]]+/\1 36/g' android/app/build.gradle
           fi
 
-          if [ -f "android/build.gradle.kts" ]; then
-            if ! grep -q "subprojects" android/build.gradle.kts; then
-              printf '\nsubprojects {\n    afterEvaluate {\n        val androidExt = extensions.findByName("android")\n        if (androidExt != null) {\n            try {\n                val m = androidExt.javaClass.getMethod("compileSdk", Int::class.javaPrimitiveType)\n                m.invoke(androidExt, 36)\n            } catch (_: Exception) {}\n        }\n    }\n}\n' >> android/build.gradle.kts
+          if [ -f "android/settings.gradle.kts" ]; then
+            if ! grep -q "gradle.beforeProject" android/settings.gradle.kts; then
+              printf '\ngradle.beforeProject {\n    afterEvaluate {\n        plugins.withId("com.android.library") {\n            extensions.findByType<com.android.build.gradle.LibraryExtension>()?.compileSdk = 36\n        }\n    }\n}\n' >> android/settings.gradle.kts
             fi
           fi
 
