@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -605,6 +608,104 @@ class DatabaseHelper {
       'recentInvoices': recentInvoices,
       'lowStockProducts': lowStockProducts,
     };
+  }
+}
+
+class BarcodeScannerScreen extends StatefulWidget {
+  final String title;
+
+  const BarcodeScannerScreen({
+    super.key,
+    this.title = 'مسح الباركود بالكاميرا',
+  });
+
+  @override
+  State<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
+}
+
+class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
+  final MobileScannerController _controller = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+  );
+  bool _handled = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_handled) return;
+    for (final barcode in capture.barcodes) {
+      final raw = barcode.rawValue?.trim();
+      if (raw != null && raw.isNotEmpty) {
+        _handled = true;
+        Navigator.of(context).pop(raw);
+        break;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          widget.title,
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF0F2C7E),
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            tooltip: 'تشغيل/إطفاء الفلاش',
+            icon: const Icon(Icons.flash_on),
+            onPressed: () => _controller.toggleTorch(),
+          ),
+          IconButton(
+            tooltip: 'تبديل الكاميرا',
+            icon: const Icon(Icons.cameraswitch),
+            onPressed: () => _controller.switchCamera(),
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          MobileScanner(
+            controller: _controller,
+            onDetect: _onDetect,
+          ),
+          Center(
+            child: Container(
+              width: 260,
+              height: 160,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.greenAccent, width: 3),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 32,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                'وجّه الكاميرا نحو الباركود ليتم التقاطه تلقائياً',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white, fontSize: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -1723,6 +1824,7 @@ class BackupScreen extends StatefulWidget {
 
 class _BackupScreenState extends State<BackupScreen> {
   String _dbPath = '';
+  String _externalDirPath = '';
   int _dbSizeBytes = 0;
   List<FileSystemEntity> _backups = [];
   bool _busy = false;
@@ -1733,7 +1835,7 @@ class _BackupScreenState extends State<BackupScreen> {
     _loadBackupInfo();
   }
 
-  Future<Directory> _getBackupDir() async {
+  Future<Directory> _getInternalBackupDir() async {
     final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
     final dir = Directory(p.join(p.dirname(dbPath), 'nebras_backups'));
     if (!await dir.exists()) {
@@ -1742,23 +1844,40 @@ class _BackupScreenState extends State<BackupScreen> {
     return dir;
   }
 
+  Future<Directory?> _getExternalAppDir() async {
+    try {
+      final extDirs = await getExternalStorageDirectories();
+      if (extDirs != null && extDirs.isNotEmpty) {
+        final dir = Directory(p.join(extDirs.first.path, 'NebrasSofT_Backups'));
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        return dir;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _loadBackupInfo() async {
     final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
     final dbFile = File(dbPath);
     final size = await dbFile.exists() ? await dbFile.length() : 0;
-    final backupDir = await _getBackupDir();
+    final backupDir = await _getInternalBackupDir();
+    final extDir = await _getExternalAppDir();
+
     final files = await backupDir.list().toList();
     files.sort((a, b) => b.path.compareTo(a.path));
 
     if (!mounted) return;
     setState(() {
       _dbPath = dbPath;
+      _externalDirPath = extDir?.path ?? 'غير متوفر على هذا الجهاز';
       _dbSizeBytes = size;
       _backups = files;
     });
   }
 
-  Future<void> _createBackup() async {
+  Future<void> _createInternalBackup() async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
@@ -1767,7 +1886,7 @@ class _BackupScreenState extends State<BackupScreen> {
       final dbFile = File(dbPath);
       if (!await dbFile.exists()) return;
 
-      final backupDir = await _getBackupDir();
+      final backupDir = await _getInternalBackupDir();
       final stamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
       final destPath = p.join(backupDir.path, 'nebras_backup_$stamp.db');
       await dbFile.copy(destPath);
@@ -1775,11 +1894,90 @@ class _BackupScreenState extends State<BackupScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إنشاء نسخة احتياطية محلية بنجاح')),
+        const SnackBar(content: Text('تم إنشاء نسخة احتياطية في الذاكرة الداخلية بنجاح')),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _exportToExternalOrPickedFolder() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await DatabaseHelper.instance.database;
+      final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+      final dbFile = File(dbPath);
+      if (!await dbFile.exists()) return;
+
+      final selectedDir = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'اختر مجلد الذاكرة الداخلية أو بطاقة SD الخارجية',
+      );
+
+      final stamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+      final fileName = 'nebras_soft_pos_backup_$stamp.db';
+
+      if (selectedDir != null && selectedDir.isNotEmpty) {
+        final targetPath = p.join(selectedDir, fileName);
+        await dbFile.copy(targetPath);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تم تصدير النسخة الاحتياطية إلى: $targetPath')),
+        );
+        return;
+      }
+
+      final extDir = await _getExternalAppDir();
+      if (extDir != null) {
+        final fallbackPath = p.join(extDir.path, fileName);
+        await dbFile.copy(fallbackPath);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تم حفظ النسخة في التخزين الخارجي للتطبيق: $fallbackPath')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذر التصدير إلى المسار المختار، جرّب مشاركة الملف')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _restoreFromAnyStorageFile() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'اختر ملف النسخة الاحتياطية (.db)',
+        type: FileType.any,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final pickedPath = result.files.single.path;
+      if (pickedPath == null || pickedPath.isEmpty) return;
+
+      final sourceFile = File(pickedPath);
+      if (!await sourceFile.exists()) return;
+
+      await _restoreFromFile(sourceFile);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _restoreFromFile(File sourceFile) async {
+    await DatabaseHelper.instance.closeDatabase();
+    final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+    await sourceFile.copy(dbPath);
+    await DatabaseHelper.instance.database;
+    await _loadBackupInfo();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تمت استعادة قاعدة البيانات بنجاح')),
+    );
   }
 
   Future<void> _shareBackupFile(File file) async {
@@ -1814,25 +2012,6 @@ class _BackupScreenState extends State<BackupScreen> {
     }
   }
 
-  Future<void> _restoreBackup(File backupFile) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await DatabaseHelper.instance.closeDatabase();
-      final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
-      await backupFile.copy(dbPath);
-      await DatabaseHelper.instance.database;
-      await _loadBackupInfo();
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تمت استعادة النسخة الاحتياطية بنجاح')),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final sizeKb = (_dbSizeBytes / 1024).toStringAsFixed(1);
@@ -1840,7 +2019,7 @@ class _BackupScreenState extends State<BackupScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'النسخ الاحتياطي',
+          'النسخ الاحتياطي والاستعادة',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
         backgroundColor: const Color(0xFF334155),
@@ -1854,27 +2033,40 @@ class _BackupScreenState extends State<BackupScreen> {
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
                     'حالة قاعدة البيانات المحلية',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text('الحجم الحالي: $sizeKb KB'),
+                  Text(
+                    'قاعدة البيانات: $_dbPath',
+                    style: const TextStyle(fontSize: 11.5, color: Colors.black54),
+                  ),
                   const SizedBox(height: 4),
                   Text(
-                    'المسار: $_dbPath',
-                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                    'التخزين الخارجي للتطبيق: $_externalDirPath',
+                    style: const TextStyle(fontSize: 11.5, color: Colors.black54),
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _busy ? null : _createBackup,
-                      icon: const Icon(Icons.backup),
-                      label: Text(_busy ? 'جاري التنفيذ...' : 'إنشاء نسخة احتياطية الآن'),
-                    ),
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _createInternalBackup,
+                    icon: const Icon(Icons.save),
+                    label: Text(_busy ? 'جاري التنفيذ...' : 'نسخة احتياطية في الذاكرة الداخلية'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _exportToExternalOrPickedFolder,
+                    icon: const Icon(Icons.sd_storage),
+                    label: const Text('تصدير إلى ذاكرة خارجية / مجلد مختار'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _restoreFromAnyStorageFile,
+                    icon: const Icon(Icons.restore),
+                    label: const Text('استعادة من ملف (داخلية / خارجية)'),
                   ),
                 ],
               ),
@@ -1882,7 +2074,7 @@ class _BackupScreenState extends State<BackupScreen> {
           ),
           const SizedBox(height: 14),
           const Text(
-            'النسخ الاحتياطية المحفوظة',
+            'النسخ المحفوظة في الذاكرة الداخلية',
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
           ),
           const SizedBox(height: 8),
@@ -1906,7 +2098,16 @@ class _BackupScreenState extends State<BackupScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       TextButton(
-                        onPressed: _busy ? null : () => _restoreBackup(file),
+                        onPressed: _busy
+                            ? null
+                            : () async {
+                                setState(() => _busy = true);
+                                try {
+                                  await _restoreFromFile(file);
+                                } finally {
+                                  if (mounted) setState(() => _busy = false);
+                                }
+                              },
                         child: const Text('استعادة'),
                       ),
                       IconButton(
@@ -2049,7 +2250,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         keyboardType: TextInputType.phone,
                         decoration: const InputDecoration(
                           labelText: 'رقم الهاتف',
-                          border: const OutlineInputBorder(),
+                          border: OutlineInputBorder(),
                         ),
                       ),
                     ),
@@ -2082,7 +2283,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   controller: addressCtrl,
                   decoration: const InputDecoration(
                     labelText: 'العنوان',
-                    border: const OutlineInputBorder(),
+                    border: OutlineInputBorder(),
                   ),
                 ),
                 if (isCustomer) ...[
@@ -2419,6 +2620,7 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
   bool _loading = true;
   bool _saving = false;
 
+  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _discountController = TextEditingController(text: '0');
 
   @override
@@ -2429,6 +2631,7 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _discountController.dispose();
     super.dispose();
   }
@@ -2493,6 +2696,34 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
           'stock_quantity': stock,
         });
       });
+    }
+  }
+
+  Future<void> _scanBarcodeForPurchase() async {
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => const BarcodeScannerScreen(title: 'مسح باركود للمشتريات'),
+      ),
+    );
+    if (code == null || code.isEmpty || !mounted) return;
+
+    final matches = _products.where(
+      (item) => (item['barcode'] ?? '').toString().trim() == code.trim(),
+    ).toList();
+
+    if (matches.isNotEmpty) {
+      _addProductToPurchase(matches.first);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تمت إضافة "${matches.first['name']}" لفاتورة الشراء')),
+      );
+    } else {
+      setState(() {
+        _search = code;
+        _searchController.text = code;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('لم يتم العثور على صنف بالباركود: $code')),
+      );
     }
   }
 
@@ -2711,18 +2942,32 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: TextField(
-              onChanged: (val) => setState(() => _search = val),
-              decoration: InputDecoration(
-                hintText: 'اختر صنفاً لإضافته لفاتورة الشراء...',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() => _search = val),
+                    decoration: InputDecoration(
+                      hintText: 'اختر صنفاً لإضافته لفاتورة الشراء...',
+                      prefixIcon: const Icon(Icons.search),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _scanBarcodeForPurchase,
+                  style: IconButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
+                  tooltip: 'مسح باركود بالكاميرا',
+                  icon: const Icon(Icons.qr_code_scanner),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -2889,6 +3134,7 @@ class _PosScreenState extends State<PosScreen> {
   bool _loading = true;
   bool _saving = false;
 
+  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _discountController = TextEditingController(text: '0');
 
   @override
@@ -2899,6 +3145,7 @@ class _PosScreenState extends State<PosScreen> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _discountController.dispose();
     super.dispose();
   }
@@ -2976,6 +3223,31 @@ class _PosScreenState extends State<PosScreen> {
           'stock_quantity': stock,
         });
       });
+    }
+  }
+
+  Future<void> _scanBarcodeForPos() async {
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => const BarcodeScannerScreen(title: 'مسح باركود البيع (POS)'),
+      ),
+    );
+    if (code == null || code.isEmpty || !mounted) return;
+
+    final matches = _products.where(
+      (item) => (item['barcode'] ?? '').toString().trim() == code.trim(),
+    ).toList();
+
+    if (matches.isNotEmpty) {
+      _addToCart(matches.first);
+    } else {
+      setState(() {
+        _search = code;
+        _searchController.text = code;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('لا يوجد صنف مسجل بالباركود: $code')),
+      );
     }
   }
 
@@ -3102,18 +3374,32 @@ class _PosScreenState extends State<PosScreen> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-            child: TextField(
-              onChanged: (val) => setState(() => _search = val),
-              decoration: InputDecoration(
-                hintText: 'ابحث بالاسم أو الباركود لإضافة الصنف للفاتورة...',
-                prefixIcon: const Icon(Icons.qr_code_scanner),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() => _search = val),
+                    decoration: InputDecoration(
+                      hintText: 'ابحث بالاسم أو الباركود...',
+                      prefixIcon: const Icon(Icons.search),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _scanBarcodeForPos,
+                  style: IconButton.styleFrom(backgroundColor: const Color(0xFF1545B5)),
+                  tooltip: 'مسح باركود بالكاميرا',
+                  icon: const Icon(Icons.qr_code_scanner),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -3183,7 +3469,7 @@ class _PosScreenState extends State<PosScreen> {
                     child: _cart.isEmpty
                         ? const Center(
                             child: Text(
-                              'اضغط على أي صنف بالأعلى لإضافته إلى الفاتورة',
+                              'اضغط على أي صنف بالأعلى أو امسح الباركود بالكاميرا',
                               style: TextStyle(color: Colors.black54),
                             ),
                           )
@@ -3288,10 +3574,18 @@ class _ProductsScreenState extends State<ProductsScreen> {
   String _searchQuery = '';
   bool _loading = true;
 
+  final TextEditingController _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _loadProducts();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadProducts() async {
@@ -3317,6 +3611,19 @@ class _ProductsScreenState extends State<ProductsScreen> {
   String _generateBarcode() {
     final millis = DateTime.now().millisecondsSinceEpoch;
     return '200${millis % 1000000000}';
+  }
+
+  Future<void> _scanInProductsSearch() async {
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => const BarcodeScannerScreen(title: 'بحث عن صنف بالباركود'),
+      ),
+    );
+    if (code == null || code.isEmpty || !mounted) return;
+    setState(() {
+      _searchQuery = code;
+      _searchController.text = code;
+    });
   }
 
   Future<void> _openProductDialog({DbRow? existingProduct}) async {
@@ -3371,13 +3678,26 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    IconButton(
+                      tooltip: 'مسح الباركود بالكاميرا',
+                      onPressed: () async {
+                        final scanned = await Navigator.of(ctx).push<String>(
+                          MaterialPageRoute(
+                            builder: (_) => const BarcodeScannerScreen(title: 'قراءة باركود الصنف'),
+                          ),
+                        );
+                        if (scanned != null && scanned.isNotEmpty) {
+                          barcodeController.text = scanned;
+                        }
+                      },
+                      icon: const Icon(Icons.qr_code_scanner, size: 26),
+                    ),
                     IconButton(
                       tooltip: 'توليد باركود تلقائي',
                       onPressed: () {
                         barcodeController.text = _generateBarcode();
                       },
-                      icon: const Icon(Icons.qr_code_2, size: 28),
+                      icon: const Icon(Icons.qr_code_2, size: 26),
                     ),
                   ],
                 ),
@@ -3521,18 +3841,32 @@ class _ProductsScreenState extends State<ProductsScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.all(12),
-            child: TextField(
-              onChanged: (val) => setState(() => _searchQuery = val),
-              decoration: InputDecoration(
-                hintText: 'ابحث باسم الصنف أو الباركود...',
-                prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() => _searchQuery = val),
+                    decoration: InputDecoration(
+                      hintText: 'ابحث باسم الصنف أو الباركود...',
+                      prefixIcon: const Icon(Icons.search),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _scanInProductsSearch,
+                  style: IconButton.styleFrom(backgroundColor: const Color(0xFF0D7C66)),
+                  tooltip: 'مسح باركود بالكاميرا',
+                  icon: const Icon(Icons.qr_code_scanner),
+                ),
+              ],
             ),
           ),
           Expanded(
