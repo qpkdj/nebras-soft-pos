@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -1076,6 +1077,8 @@ class BarcodeScannerScreen extends StatefulWidget {
 class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   final MobileScannerController _controller = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
+    facing: CameraFacing.back,
+    torchEnabled: false,
   );
   bool _handled = false;
 
@@ -1111,12 +1114,20 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           IconButton(
             tooltip: 'تشغيل/إطفاء الفلاش',
             icon: const Icon(Icons.flash_on),
-            onPressed: () => _controller.toggleTorch(),
+            onPressed: () async {
+              try {
+                await _controller.toggleTorch();
+              } catch (_) {}
+            },
           ),
           IconButton(
             tooltip: 'تبديل الكاميرا',
             icon: const Icon(Icons.cameraswitch),
-            onPressed: () => _controller.switchCamera(),
+            onPressed: () async {
+              try {
+                await _controller.switchCamera();
+              } catch (_) {}
+            },
           ),
         ],
       ),
@@ -1125,6 +1136,36 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           MobileScanner(
             controller: _controller,
             onDetect: _onDetect,
+            errorBuilder: (context, error, child) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.videocam_off, size: 52, color: Colors.redAccent),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'تعذر تشغيل الكاميرا، تأكد من منح إذن الكاميرا للتطبيق أو أن الكاميرا غير مشغلة بتطبيق آخر.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      const SizedBox(height: 14),
+                      FilledButton.icon(
+                        onPressed: () async {
+                          try {
+                            await _controller.stop();
+                            await _controller.start();
+                          } catch (_) {}
+                        },
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('إعادة تشغيل الكاميرا'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
           Center(
             child: Container(
@@ -2955,12 +2996,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _shareAppInfo() async {
     const shareText =
-        'تطبيق Nebras SofT Pos لإدارة نقاط البيع والمخزون والفواتير والعملاء والموردين والحسابات — من تطوير نبراس SofT.';
-    await Clipboard.setData(const ClipboardData(text: shareText));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم نسخ نص مشاركة البرنامج إلى الحافظة')),
-    );
+        'تطبيق Nebras SofT Pos لإدارة نقاط البيع والمخزون والفواتير والعملاء والموردين والحسابات — من تطوير نبراس SofT.\n$_githubUrl';
+    try {
+      await Share.share(shareText, subject: 'Nebras SofT Pos');
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذر فتح قائمة المشاركة على هذا الجهاز')),
+      );
+    }
   }
 
   Widget _buildSpecialDrawer() {
