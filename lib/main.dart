@@ -19,6 +19,10 @@ import 'package:sqflite/sqflite.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 typedef DbRow = Map<String, dynamic>;
+typedef DbRows = List<DbRow>;
+typedef StringMap = Map<String, String>;
+typedef CsvRow = List<dynamic>;
+typedef CsvTable = List<CsvRow>;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,12 +30,19 @@ void main() {
 }
 
 class DeviceLicenseService {
-  // غيّر هذا المفتاح السري إلى نص سري خاص بك ولا تشاركه مع أي مستخدم
   static const String appSecretSalt = 'NEBRAS_SOFT_POS_2026_SECRET_KEY_#967';
   static const String developerWhatsappUrl = 'https://wa.me/967735114406';
 
   static String normalizePhone(String phone) {
     return phone.replaceAll(RegExp(r'[^0-9+]'), '').trim();
+  }
+
+  static bool isValidUserName(String name) {
+    final clean = name.trim();
+    if (clean.length < 2) return false;
+    final hasDigits = RegExp(r'[0-9٠-٩]').hasMatch(clean);
+    final hasLetters = RegExp(r'[a-zA-Z\u0621-\u064A]').hasMatch(clean);
+    return hasLetters && !hasDigits;
   }
 
   static Future<String> getOrCreateDeviceFingerprint() async {
@@ -85,7 +96,7 @@ class DeviceLicenseService {
 
     try {
       final decoded = jsonDecode(usedSerialsRaw);
-      if (decoded is Map<String, dynamic>) {
+      if (decoded is DbRow) {
         final ownerFp = decoded[savedSerial]?.toString() ?? '';
         if (ownerFp.isNotEmpty && ownerFp != currentFp) {
           return false;
@@ -96,7 +107,7 @@ class DeviceLicenseService {
     return true;
   }
 
-  static Future> activateDevice({
+  static Future<DbRow> activateDevice({
     required String userName,
     required String phone,
     required String serialInput,
@@ -105,8 +116,8 @@ class DeviceLicenseService {
     final cleanPhone = normalizePhone(phone);
     final cleanSerial = serialInput.trim().toUpperCase();
 
-    if (cleanName.isEmpty) {
-      return {'ok': false, 'reason': 'يرجى إدخال الاسم الكامل.'};
+    if (!isValidUserName(cleanName)) {
+      return {'ok': false, 'reason': 'يرجى إدخال الاسم الكامل بالحروف فقط بدون أرقام.'};
     }
     if (cleanPhone.length < 6) {
       return {'ok': false, 'reason': 'يرجى إدخال رقم هاتف صحيح.'};
@@ -118,7 +129,7 @@ class DeviceLicenseService {
     final currentFp = await getOrCreateDeviceFingerprint();
     final settings = await DatabaseHelper.instance.getSettingsMap();
 
-    final Map<String, String> usedMap = {};
+    final StringMap usedMap = {};
     final rawUsed = (settings['used_serials_json'] ?? '').trim();
     if (rawUsed.isNotEmpty) {
       try {
@@ -206,7 +217,8 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
     final isAct = await DeviceLicenseService.isDeviceActivated();
     final settings = await DatabaseHelper.instance.getSettingsMap();
     if (!mounted) return;
-    _nameCtrl.text = settings['licensed_user_name'] ?? '';
+    final savedName = (settings['licensed_user_name'] ?? '').trim();
+    _nameCtrl.text = DeviceLicenseService.isValidUserName(savedName) ? savedName : '';
     _phoneCtrl.text = settings['licensed_phone'] ?? '';
     setState(() {
       _fingerprint = fp;
@@ -225,13 +237,23 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
 
   Future<void> _sendRequestToDeveloperWhatsapp() async {
     final name = _nameCtrl.text.trim();
-    final phone = _phoneCtrl.text.trim();
-    if (name.isEmpty || phone.isEmpty) {
+    final phone = DeviceLicenseService.normalizePhone(_phoneCtrl.text);
+
+    if (!DeviceLicenseService.isValidUserName(name)) {
       setState(() {
-        _errorText = 'يرجى كتابة الاسم ورقم الهاتف أولاً قبل إرسال الطلب للمطور.';
+        _errorText = 'يرجى كتابة الاسم بالحروف بشكل صحيح بدون أرقام.';
       });
       return;
     }
+
+    if (phone.length < 6) {
+      setState(() {
+        _errorText = 'يرجى كتابة رقم الهاتف بشكل صحيح قبل إرسال الطلب للمطور.';
+      });
+      return;
+    }
+
+    setState(() => _errorText = null);
 
     final msg = Uri.encodeComponent(
       'طلب تفعيل تطبيق Nebras SofT Pos\n'
@@ -331,8 +353,12 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: _nameCtrl,
+                      keyboardType: TextInputType.name,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.deny(RegExp(r'[0-9٠-٩]')),
+                      ],
                       decoration: const InputDecoration(
-                        labelText: 'الاسم الكامل *',
+                        labelText: 'الاسم الكامل (حروف فقط) *',
                         prefixIcon: Icon(Icons.person_outline),
                         border: OutlineInputBorder(),
                       ),
@@ -341,6 +367,9 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
                     TextField(
                       controller: _phoneCtrl,
                       keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9+]')),
+                      ],
                       decoration: const InputDecoration(
                         labelText: 'رقم الهاتف *',
                         prefixIcon: Icon(Icons.phone_android),
@@ -466,9 +495,7 @@ class ForceUpdateGuardService {
     }
   }
 
-  static Future> evaluateUpdateStatus(
-    Map<String, String> settings,
-  ) async {
+  static Future<DbRow> evaluateUpdateStatus(StringMap settings) async {
     final bool isOnline = await hasInternetConnection();
     if (!isOnline) {
       return {
@@ -501,7 +528,7 @@ class ForceUpdateGuardService {
         if (res.statusCode == 200) {
           final body = await res.transform(utf8.decoder).join();
           final decoded = jsonDecode(body);
-          if (decoded is Map<String, dynamic>) {
+          if (decoded is DbRow) {
             final bool remoteForce = decoded['force_update'] == true ||
                 decoded['force_update']?.toString() == '1';
             final String remoteVer = (decoded['latest_version'] ?? latestVer).toString().trim();
@@ -615,7 +642,7 @@ class CsvExportService {
     return '"$raw"';
   }
 
-  static Uint8List _buildUtf8BomCsvBytes(List<List<dynamic>> rows) {
+  static Uint8List _buildUtf8BomCsvBytes(CsvTable rows) {
     final buffer = StringBuffer();
     for (final row in rows) {
       buffer.writeln(row.map(_escapeCsv).join(','));
@@ -632,7 +659,7 @@ class CsvExportService {
   static Future<void> exportAndShareCsv({
     required BuildContext context,
     required String fileBaseName,
-    required List<List<dynamic>> rows,
+    required CsvTable rows,
   }) async {
     await AppPermissionsService.ensureStoragePermissions();
     final bytes = _buildUtf8BomCsvBytes(rows);
@@ -886,7 +913,7 @@ class DatabaseHelper {
     });
   }
 
-  Future<List<DbRow>> queryAllCategories() async {
+  Future<DbRows> queryAllCategories() async {
     final db = await instance.database;
     return await db.query('categories', orderBy: 'id ASC');
   }
@@ -905,10 +932,10 @@ class DatabaseHelper {
     return await db.delete('categories', where: 'id = ?', whereArgs: [id]);
   }
 
-  Future> getSettingsMap() async {
+  Future<StringMap> getSettingsMap() async {
     final db = await instance.database;
     final rows = await db.query('settings');
-    final map = <String, String>{
+    final StringMap map = {
       'shop_name': 'نبراس SofT لنقاط البيع',
       'shop_phone': '',
       'shop_address': '',
@@ -930,6 +957,33 @@ class DatabaseHelper {
       'licensed_fingerprint': '',
       'licensed_serial': '',
       'used_serials_json': '{}',
+      'printer_a4_footer': '',
+      'printer_text_height': '10',
+      'printer_type': 'PDF',
+      'printer_address': '',
+      'printer_copies': '1',
+      'printer_thermal_model': '1',
+      'printer_barcode_model': '1',
+      'printer_cut_cmd': '0',
+      'printer_drawer_cmd': '0',
+      'printer_font_size': '20',
+      'printer_right_margin': '0',
+      'printer_bottom_margin': '0',
+      'printer_show_customer_info': '0',
+      'printer_show_prev_debt': '0',
+      'printer_product_separate_row': '0',
+      'printer_show_expiry_a4': '0',
+      'printer_show_prod_num_a4': '0',
+      'printer_show_prod_desc': '0',
+      'printer_select_a4_on_send': '0',
+      'printer_auto_print_after_save': '0',
+      'printer_show_tax_qr': '0',
+      'printer_show_prod_image': '0',
+      'printer_label_title': 'فاتورة مبيعات',
+      'printer_label_customer': 'العميل',
+      'printer_label_total': 'الإجمالي',
+      'printer_label_paid': 'المدفوع',
+      'printer_label_remaining': 'المتبقي',
     };
     for (final r in rows) {
       final k = r['key']?.toString();
@@ -950,7 +1004,7 @@ class DatabaseHelper {
     return map;
   }
 
-  Future<void> saveSettingsMap(Map<String, String> values) async {
+  Future<void> saveSettingsMap(StringMap values) async {
     final db = await instance.database;
     await db.transaction((txn) async {
       for (final entry in values.entries) {
@@ -995,7 +1049,7 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<DbRow>> queryAllProducts() async {
+  Future<DbRows> queryAllProducts() async {
     final db = await instance.database;
     return await db.rawQuery('''
       SELECT p.*, COALESCE(c.name, 'عام') AS category_name
@@ -1032,7 +1086,7 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<DbRow>> queryContactsByType(String type) async {
+  Future<DbRows> queryContactsByType(String type) async {
     final db = await instance.database;
     return await db.query(
       'contacts',
@@ -1042,11 +1096,11 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<DbRow>> querySuppliers() async {
+  Future<DbRows> querySuppliers() async {
     return queryContactsByType('supplier');
   }
 
-  Future<List<DbRow>> queryCustomers() async {
+  Future<DbRows> queryCustomers() async {
     return queryContactsByType('customer');
   }
 
@@ -1086,7 +1140,7 @@ class DatabaseHelper {
     }
   }
 
-  Future> getContactStatementData(int contactId) async {
+  Future<DbRow> getContactStatementData(int contactId) async {
     final db = await instance.database;
     final contactRows = await db.query(
       'contacts',
@@ -1095,7 +1149,7 @@ class DatabaseHelper {
       limit: 1,
     );
     if (contactRows.isEmpty) {
-      return <String, dynamic>{};
+      return {};
     }
 
     final contact = contactRows.first;
@@ -1112,7 +1166,7 @@ class DatabaseHelper {
       orderBy: 'date DESC, id DESC',
     );
 
-    final List<DbRow> movements = [];
+    final DbRows movements = [];
 
     for (final inv in invoices) {
       final invType = (inv['type'] ?? '').toString();
@@ -1194,7 +1248,7 @@ class DatabaseHelper {
   }
 
   Future<String> createSaleInvoice({
-    required List<DbRow> cartItems,
+    required DbRows cartItems,
     required double totalAmount,
     double discount = 0.0,
     String paymentMethod = 'نقدي',
@@ -1267,7 +1321,7 @@ class DatabaseHelper {
   }
 
   Future<String> createPurchaseInvoice({
-    required List<DbRow> purchaseItems,
+    required DbRows purchaseItems,
     required double totalAmount,
     required double discount,
     required double paidAmount,
@@ -1347,7 +1401,7 @@ class DatabaseHelper {
 
   Future<String> createReturnFromInvoice({
     required String originalInvoiceNumber,
-    required List<DbRow> returnItems,
+    required DbRows returnItems,
   }) async {
     final db = await instance.database;
     final details = await getInvoiceDetailsByNumber(originalInvoiceNumber);
@@ -1452,7 +1506,7 @@ class DatabaseHelper {
   Future<DbRow> getInvoiceDetailsByNumber(String invoiceNumber) async {
     final db = await instance.database;
     final invRows = await db.rawQuery('''
-      SELECT inv.*, c.name AS contact_name
+      SELECT inv.*, c.name AS contact_name, c.phone AS contact_phone, c.address AS contact_address, c.balance AS contact_balance
       FROM invoices inv
       LEFT JOIN contacts c ON c.id = inv.contact_id
       WHERE inv.invoice_number = ?
@@ -1460,7 +1514,7 @@ class DatabaseHelper {
     ''', [invoiceNumber]);
 
     if (invRows.isEmpty) {
-      return <String, dynamic>{};
+      return {};
     }
 
     final inv = invRows.first;
@@ -1495,7 +1549,7 @@ class DatabaseHelper {
     return true;
   }
 
-  Future> getCashboxSummary({DateTime? startDate, DateTime? endDate}) async {
+  Future<DbRow> getCashboxSummary({DateTime? startDate, DateTime? endDate}) async {
     final db = await instance.database;
     final allInvoices = await db.query('invoices', orderBy: 'id DESC');
     final allVouchers = await db.query('vouchers', orderBy: 'id DESC');
@@ -1552,7 +1606,7 @@ class DatabaseHelper {
     final netCashOut = cashPurchases + paymentsTotal + expensesTotal;
     final cashInBox = netCashIn - netCashOut;
 
-    final List<DbRow> entries = [];
+    final DbRows entries = [];
     for (final inv in filteredInvoices) {
       if ((inv['payment_method'] ?? '').toString() != 'نقدي') continue;
       final t = (inv['type'] ?? '').toString();
@@ -1594,7 +1648,7 @@ class DatabaseHelper {
     };
   }
 
-  Future> getFinancialSummary({DateTime? startDate, DateTime? endDate}) async {
+  Future<DbRow> getFinancialSummary({DateTime? startDate, DateTime? endDate}) async {
     final db = await instance.database;
 
     final allInvoices = await db.query('invoices', orderBy: 'id DESC');
@@ -1946,7 +2000,7 @@ class ThermalPdfService {
     required String barcodeValue,
     required int copies,
     required bool isA4Sheet,
-    required Map<String, String> settings,
+    required StringMap settings,
   }) async {
     final fontRegular = await PdfGoogleFonts.cairoRegular();
     final fontBold = await PdfGoogleFonts.cairoBold();
@@ -2241,10 +2295,11 @@ class ThermalPdfService {
     );
   }
 
-  static String _invoiceTitleArabic(String type) {
+  static String _invoiceTitleArabic(String type, StringMap settings) {
     switch (type) {
       case 'sale':
-        return 'فاتورة مبيعات';
+        final custom = (settings['printer_label_title'] ?? '').trim();
+        return custom.isNotEmpty ? custom : 'فاتورة مبيعات';
       case 'purchase':
         return 'فاتورة مشتريات';
       case 'sale_return':
@@ -2258,8 +2313,8 @@ class ThermalPdfService {
 
   static Future<Uint8List> buildReceiptPdf({
     required DbRow invoice,
-    required List<DbRow> items,
-    required Map<String, String> settings,
+    required DbRows items,
+    required StringMap settings,
     bool? is80mm,
   }) async {
     final fontRegular = await PdfGoogleFonts.cairoRegular();
@@ -2281,11 +2336,18 @@ class ThermalPdfService {
     final String shopAddress = (settings['shop_address'] ?? '').trim();
     final String currency = (settings['currency_symbol'] ?? 'ر.ي').trim();
     final String footerText = (settings['receipt_footer'] ?? 'شكراً لتعاملكم معنا • Nebras SofT Pos').trim();
+    final bool showCustomerInfo = settings['printer_show_customer_info'] == '1';
+    final bool showPrevDebt = settings['printer_show_prev_debt'] == '1';
+    final String customerLabel = (settings['printer_label_customer'] ?? 'العميل').trim();
+    final String totalLabel = (settings['printer_label_total'] ?? 'الصافي').trim();
 
     final String invNum = (invoice['invoice_number'] ?? '').toString();
     final String rawDate = (invoice['date'] ?? '').toString();
     final String formattedDate = rawDate.replaceFirst('T', ' ').split('.').first;
     final String contactName = (invoice['contact_name'] ?? (isCustomerSide ? 'عميل نقدي عام' : 'مورد نقدي عام')).toString();
+    final String contactPhone = (invoice['contact_phone'] ?? '').toString();
+    final String contactAddress = (invoice['contact_address'] ?? '').toString();
+    final double contactBalance = (invoice['contact_balance'] as num?)?.toDouble() ?? 0.0;
     final String payMethod = (invoice['payment_method'] ?? 'نقدي').toString();
     final double netTotal = (invoice['total_amount'] as num?)?.toDouble() ?? 0.0;
     final double discount = (invoice['discount'] as num?)?.toDouble() ?? 0.0;
@@ -2320,7 +2382,7 @@ class ThermalPdfService {
                   ),
                 pw.SizedBox(height: 3),
                 pw.Text(
-                  _invoiceTitleArabic(invType),
+                  _invoiceTitleArabic(invType, settings),
                   textAlign: pw.TextAlign.center,
                   style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold),
                 ),
@@ -2329,9 +2391,18 @@ class ThermalPdfService {
                 pw.Text('رقم المستند: $invNum', style: const pw.TextStyle(fontSize: 8.5)),
                 pw.Text('التاريخ: $formattedDate', style: const pw.TextStyle(fontSize: 8.5)),
                 pw.Text(
-                  '${isCustomerSide ? 'العميل' : 'المورد'}: $contactName',
+                  '${isCustomerSide ? customerLabel : 'المورد'}: $contactName',
                   style: const pw.TextStyle(fontSize: 8.5),
                 ),
+                if (showCustomerInfo && contactPhone.isNotEmpty)
+                  pw.Text('هاتف العميل: $contactPhone', style: const pw.TextStyle(fontSize: 8)),
+                if (showCustomerInfo && contactAddress.isNotEmpty)
+                  pw.Text('عنوان العميل: $contactAddress', style: const pw.TextStyle(fontSize: 8)),
+                if (showPrevDebt && isCustomerSide)
+                  pw.Text(
+                    'رصيد العميل: ${contactBalance.toStringAsFixed(2)} $currency',
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
                 pw.Text('طريقة الدفع: $payMethod', style: const pw.TextStyle(fontSize: 8.5)),
                 pw.Divider(thickness: 0.8),
                 pw.Row(
@@ -2436,7 +2507,7 @@ class ThermalPdfService {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
                     pw.Text(
-                      'الصافي:',
+                      '$totalLabel:',
                       style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
                     ),
                     pw.Text(
@@ -2464,8 +2535,8 @@ class ThermalPdfService {
 
   static Future<Uint8List> buildContactStatementPdf({
     required DbRow contact,
-    required List<DbRow> movements,
-    required Map<String, String> settings,
+    required DbRows movements,
+    required StringMap settings,
   }) async {
     final fontRegular = await PdfGoogleFonts.cairoRegular();
     final fontBold = await PdfGoogleFonts.cairoBold();
@@ -2482,6 +2553,7 @@ class ThermalPdfService {
     final String shopPhone = (settings['shop_phone'] ?? '').trim();
     final String shopAddress = (settings['shop_address'] ?? '').trim();
     final String currency = (settings['currency_symbol'] ?? 'ر.ي').trim();
+    final String a4Footer = (settings['printer_a4_footer'] ?? '').trim();
 
     final String contactName = (contact['name'] ?? '').toString();
     final String contactPhone = (contact['phone'] ?? '').toString();
@@ -2626,6 +2698,15 @@ class ThermalPdfService {
                 ),
               ],
             ),
+            if (a4Footer.isNotEmpty) ...[
+              pw.SizedBox(height: 14),
+              pw.Divider(thickness: 0.5),
+              pw.Text(
+                a4Footer,
+                textAlign: pw.TextAlign.center,
+                style: const pw.TextStyle(fontSize: 9),
+              ),
+            ],
           ];
         },
       ),
@@ -2640,7 +2721,7 @@ class ThermalPdfService {
 
     final settings = await DatabaseHelper.instance.getSettingsMap();
     final contact = statementData['contact'] as DbRow;
-    final movements = (statementData['movements'] as List<DbRow>?) ?? [];
+    final movements = (statementData['movements'] as DbRows?) ?? [];
     final String contactName = (contact['name'] ?? '').toString();
 
     if (!context.mounted) return;
@@ -2725,7 +2806,7 @@ class ThermalPdfService {
 
     final settings = await DatabaseHelper.instance.getSettingsMap();
     final inv = details['invoice'] as DbRow;
-    final items = (details['items'] as List<DbRow>?) ?? [];
+    final items = (details['items'] as DbRows?) ?? [];
     final bytes = await buildReceiptPdf(
       invoice: inv,
       items: items,
@@ -2749,7 +2830,7 @@ class ThermalPdfService {
 
     final settings = await DatabaseHelper.instance.getSettingsMap();
     final inv = details['invoice'] as DbRow;
-    final items = (details['items'] as List<DbRow>?) ?? [];
+    final items = (details['items'] as DbRows?) ?? [];
     final bytes = await buildReceiptPdf(
       invoice: inv,
       items: items,
@@ -2772,7 +2853,7 @@ class ThermalPdfService {
     if (details.isEmpty || !context.mounted) return;
 
     final inv = details['invoice'] as DbRow;
-    final rawItems = (details['items'] as List<DbRow>?) ?? [];
+    final rawItems = (details['items'] as DbRows?) ?? [];
     if (rawItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('لا توجد أصناف قابلة للإرجاع في هذه الفاتورة')),
@@ -2783,10 +2864,10 @@ class ThermalPdfService {
     final String origType = (inv['type'] ?? 'sale').toString();
     final bool isSaleSide = origType == 'sale' || origType == 'sale_return';
 
-    final List<DbRow> editableItems = rawItems.map((it) {
+    final DbRows editableItems = rawItems.map((it) {
       final double maxQty = (it['quantity'] as num?)?.toDouble() ?? 0.0;
       final double price = (it['price'] as num?)?.toDouble() ?? 0.0;
-      return {
+      return <String, dynamic>{
         'product_id': it['product_id'],
         'name': (it['name'] ?? '').toString(),
         'max_qty': maxQty,
@@ -3152,7 +3233,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _runStartupUpdateGuard(Map<String, String> settings) async {
+  Future<void> _runStartupUpdateGuard(StringMap settings) async {
     final status = await ForceUpdateGuardService.evaluateUpdateStatus(settings);
     if (!mounted) return;
     final bool isOnline = status['online'] == true;
@@ -3714,53 +3795,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _showPrinterSettingsDialog() async {
-    bool selected80mm = _printerPaper != '58mm';
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('إعدادات الطابعة', style: TextStyle(fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('اختر مقاس الورق الافتراضي للطباعة الحرارية:'),
-              const SizedBox(height: 12),
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: true, label: Text('80mm')),
-                  ButtonSegment(value: false, label: Text('58mm')),
-                ],
-                selected: {selected80mm},
-                onSelectionChanged: (sel) {
-                  setDialogState(() => selected80mm = sel.first);
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final nextPaper = selected80mm ? '80mm' : '58mm';
-                await DatabaseHelper.instance.saveSettingsMap({'printer_paper': nextPaper});
-                if (ctx.mounted) Navigator.of(ctx).pop();
-                await _refreshStats();
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('تم حفظ مقاس الطابعة الافتراضي: $nextPaper')),
-                );
-              },
-              child: const Text('حفظ'),
-            ),
-          ],
-        ),
-      ),
+  Future<void> _openPrinterSettingsScreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const PrinterSettingsScreen()),
     );
+    await _refreshStats();
   }
 
   Future<void> _showDesktopSyncDialog() async {
@@ -3958,7 +3997,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     subtitle: Text('المقاس الحالي: $_printerPaper'),
                     onTap: () {
                       Navigator.of(context).pop();
-                      _showPrinterSettingsDialog();
+                      _openPrinterSettingsScreen();
                     },
                   ),
                   ListTile(
@@ -4109,6 +4148,485 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+class PrinterSettingsScreen extends StatefulWidget {
+  const PrinterSettingsScreen({super.key});
+
+  @override
+  State<PrinterSettingsScreen> createState() => _PrinterSettingsScreenState();
+}
+
+class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
+  bool _loading = true;
+  bool _saving = false;
+
+  final _invoiceFooterCtrl = TextEditingController();
+  final _a4FooterCtrl = TextEditingController();
+  final _heightPosCtrl = TextEditingController(text: '10');
+  final _printerAddressCtrl = TextEditingController();
+  final _fontSizeCtrl = TextEditingController(text: '20');
+  final _rightMarginCtrl = TextEditingController(text: '0');
+  final _bottomMarginCtrl = TextEditingController(text: '0');
+
+  String _printerType = 'PDF';
+  String _thermalPaperSize = '58mm';
+  int _invoiceCopies = 1;
+  int _thermalPrinterModel = 1;
+  int _barcodePrinterModel = 1;
+  int _paperCutCommand = 0;
+  int _cashDrawerCommand = 0;
+
+  bool _showCustomerInfo = false;
+  bool _showPrevDebt = false;
+  bool _productSeparateRow = false;
+  bool _showExpiryA4 = false;
+  bool _showProdNumA4 = false;
+  bool _showProdDesc = false;
+  bool _selectA4OnSend = false;
+  bool _autoPrintAfterSave = false;
+  bool _showTaxQr = false;
+  bool _showProdImage = false;
+
+  String _labelTitle = 'فاتورة مبيعات';
+  String _labelCustomer = 'العميل';
+  String _labelTotal = 'الإجمالي';
+  String _labelPaid = 'المدفوع';
+  String _labelRemaining = 'المتبقي';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  @override
+  void dispose() {
+    _invoiceFooterCtrl.dispose();
+    _a4FooterCtrl.dispose();
+    _heightPosCtrl.dispose();
+    _printerAddressCtrl.dispose();
+    _fontSizeCtrl.dispose();
+    _rightMarginCtrl.dispose();
+    _bottomMarginCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadData() async {
+    final s = await DatabaseHelper.instance.getSettingsMap();
+    if (!mounted) return;
+    setState(() {
+      _invoiceFooterCtrl.text = s['receipt_footer'] ?? '';
+      _a4FooterCtrl.text = s['printer_a4_footer'] ?? '';
+      _heightPosCtrl.text = s['printer_text_height'] ?? '10';
+      _printerType = s['printer_type'] ?? 'PDF';
+      _printerAddressCtrl.text = s['printer_address'] ?? '';
+      _thermalPaperSize = (s['printer_paper'] ?? '58mm') == '80mm' ? '80mm' : '58mm';
+      _invoiceCopies = int.tryParse(s['printer_copies'] ?? '1') ?? 1;
+      _thermalPrinterModel = int.tryParse(s['printer_thermal_model'] ?? '1') ?? 1;
+      _barcodePrinterModel = int.tryParse(s['printer_barcode_model'] ?? '1') ?? 1;
+      _paperCutCommand = int.tryParse(s['printer_cut_cmd'] ?? '0') ?? 0;
+      _cashDrawerCommand = int.tryParse(s['printer_drawer_cmd'] ?? '0') ?? 0;
+      _fontSizeCtrl.text = s['printer_font_size'] ?? '20';
+      _rightMarginCtrl.text = s['printer_right_margin'] ?? '0';
+      _bottomMarginCtrl.text = s['printer_bottom_margin'] ?? '0';
+
+      _showCustomerInfo = s['printer_show_customer_info'] == '1';
+      _showPrevDebt = s['printer_show_prev_debt'] == '1';
+      _productSeparateRow = s['printer_product_separate_row'] == '1';
+      _showExpiryA4 = s['printer_show_expiry_a4'] == '1';
+      _showProdNumA4 = s['printer_show_prod_num_a4'] == '1';
+      _showProdDesc = s['printer_show_prod_desc'] == '1';
+      _selectA4OnSend = s['printer_select_a4_on_send'] == '1';
+      _autoPrintAfterSave = s['printer_auto_print_after_save'] == '1';
+      _showTaxQr = s['printer_show_tax_qr'] == '1';
+      _showProdImage = s['printer_show_prod_image'] == '1';
+
+      _labelTitle = s['printer_label_title'] ?? 'فاتورة مبيعات';
+      _labelCustomer = s['printer_label_customer'] ?? 'العميل';
+      _labelTotal = s['printer_label_total'] ?? 'الإجمالي';
+      _labelPaid = s['printer_label_paid'] ?? 'المدفوع';
+      _labelRemaining = s['printer_label_remaining'] ?? 'المتبقي';
+      _loading = false;
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await DatabaseHelper.instance.saveSettingsMap({
+        'receipt_footer': _invoiceFooterCtrl.text.trim(),
+        'printer_a4_footer': _a4FooterCtrl.text.trim(),
+        'printer_text_height': _heightPosCtrl.text.trim().isEmpty ? '10' : _heightPosCtrl.text.trim(),
+        'printer_type': _printerType,
+        'printer_address': _printerAddressCtrl.text.trim(),
+        'printer_paper': _thermalPaperSize,
+        'printer_copies': _invoiceCopies.toString(),
+        'printer_thermal_model': _thermalPrinterModel.toString(),
+        'printer_barcode_model': _barcodePrinterModel.toString(),
+        'printer_cut_cmd': _paperCutCommand.toString(),
+        'printer_drawer_cmd': _cashDrawerCommand.toString(),
+        'printer_font_size': _fontSizeCtrl.text.trim().isEmpty ? '20' : _fontSizeCtrl.text.trim(),
+        'printer_right_margin': _rightMarginCtrl.text.trim().isEmpty ? '0' : _rightMarginCtrl.text.trim(),
+        'printer_bottom_margin': _bottomMarginCtrl.text.trim().isEmpty ? '0' : _bottomMarginCtrl.text.trim(),
+        'printer_show_customer_info': _showCustomerInfo ? '1' : '0',
+        'printer_show_prev_debt': _showPrevDebt ? '1' : '0',
+        'printer_product_separate_row': _productSeparateRow ? '1' : '0',
+        'printer_show_expiry_a4': _showExpiryA4 ? '1' : '0',
+        'printer_show_prod_num_a4': _showProdNumA4 ? '1' : '0',
+        'printer_show_prod_desc': _showProdDesc ? '1' : '0',
+        'printer_select_a4_on_send': _selectA4OnSend ? '1' : '0',
+        'printer_auto_print_after_save': _autoPrintAfterSave ? '1' : '0',
+        'printer_show_tax_qr': _showTaxQr ? '1' : '0',
+        'printer_show_prod_image': _showProdImage ? '1' : '0',
+        'printer_label_title': _labelTitle,
+        'printer_label_customer': _labelCustomer,
+        'printer_label_total': _labelTotal,
+        'printer_label_paid': _labelPaid,
+        'printer_label_remaining': _labelRemaining,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ إعدادات الطابعة بنجاح')),
+      );
+      Navigator.of(context).pop();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _searchPrinterDialog() async {
+    final tempCtrl = TextEditingController(text: _printerAddressCtrl.text);
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('بحث عن طابعة ($_printerType)'),
+        content: TextField(
+          controller: tempCtrl,
+          decoration: const InputDecoration(
+            labelText: 'عنوان الطابعة (IP أو MAC)',
+            hintText: 'مثال: 192.168.1.100',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, tempCtrl.text.trim()), child: const Text('اعتماد')),
+        ],
+      ),
+    );
+    if (res != null && mounted) {
+      setState(() => _printerAddressCtrl.text = res);
+    }
+  }
+
+  Future<void> _editLabelsDialog() async {
+    final titleCtrl = TextEditingController(text: _labelTitle);
+    final custCtrl = TextEditingController(text: _labelCustomer);
+    final totCtrl = TextEditingController(text: _labelTotal);
+    final paidCtrl = TextEditingController(text: _labelPaid);
+    final remCtrl = TextEditingController(text: _labelRemaining);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تعديل مسميات الفاتورة'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: 'عنوان الفاتورة')),
+              TextField(controller: custCtrl, decoration: const InputDecoration(labelText: 'مسمى العميل')),
+              TextField(controller: totCtrl, decoration: const InputDecoration(labelText: 'مسمى الإجمالي')),
+              TextField(controller: paidCtrl, decoration: const InputDecoration(labelText: 'مسمى المدفوع')),
+              TextField(controller: remCtrl, decoration: const InputDecoration(labelText: 'مسمى المتبقي')),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حفظ')),
+        ],
+      ),
+    );
+    if (ok == true && mounted) {
+      setState(() {
+        _labelTitle = titleCtrl.text.trim().isEmpty ? 'فاتورة مبيعات' : titleCtrl.text.trim();
+        _labelCustomer = custCtrl.text.trim().isEmpty ? 'العميل' : custCtrl.text.trim();
+        _labelTotal = totCtrl.text.trim().isEmpty ? 'الإجمالي' : totCtrl.text.trim();
+        _labelPaid = paidCtrl.text.trim().isEmpty ? 'المدفوع' : paidCtrl.text.trim();
+        _labelRemaining = remCtrl.text.trim().isEmpty ? 'المتبقي' : remCtrl.text.trim();
+      });
+    }
+  }
+
+  Widget _roundedField({
+    required TextEditingController controller,
+    String? hint,
+    TextInputType keyboardType = TextInputType.text,
+    int maxLines = 1,
+    TextAlign textAlign = TextAlign.right,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      maxLines: maxLines,
+      textAlign: textAlign,
+      decoration: InputDecoration(
+        hintText: hint,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        filled: true,
+        fillColor: Colors.white,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFF90A4AE), width: 1.2),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFF0F2C7E), width: 1.5),
+        ),
+      ),
+    );
+  }
+
+  Widget _numberRow(String label, TextEditingController controller) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(flex: 5, child: Text(label, style: const TextStyle(fontSize: 15))),
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 5,
+            child: _roundedField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dropdownRow(String label, int value, List<int> items, ValueChanged<int?> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(flex: 6, child: Text(label, style: const TextStyle(fontSize: 15))),
+          Expanded(
+            flex: 4,
+            child: DropdownButton<int>(
+              value: items.contains(value) ? value : items.first,
+              isExpanded: true,
+              underline: const SizedBox.shrink(),
+              items: items.map((e) => DropdownMenuItem<int>(value: e, child: Text('$e'))).toList(),
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _switchRow(String title, bool value, ValueChanged<bool> onChanged) {
+    return Column(
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(title, style: const TextStyle(fontSize: 14.5)),
+          value: value,
+          onChanged: onChanged,
+        ),
+        const Divider(height: 1),
+      ],
+    );
+  }
+
+  Widget _typeRadio(String type, String sizeHint) {
+    return InkWell(
+      onTap: () => setState(() => _printerType = type),
+      child: Row(
+        children: [
+          Radio<String>(
+            value: type,
+            groupValue: _printerType,
+            onChanged: (v) => setState(() => _printerType = v ?? 'PDF'),
+          ),
+          SizedBox(width: 90, child: Text(type, style: const TextStyle(fontSize: 15))),
+          Text(sizeHint, style: const TextStyle(fontSize: 14, color: Colors.black54)),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FA),
+      appBar: AppBar(
+        title: const Text('إعدادات الطابعه', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        backgroundColor: const Color(0xFF0F2C7E),
+        iconTheme: const IconThemeData(color: Colors.white),
+        centerTitle: true,
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text('نص اسفل فاتورة البيع', style: TextStyle(fontSize: 15)),
+                        const SizedBox(height: 6),
+                        _roundedField(controller: _invoiceFooterCtrl, hint: 'نص اسفل فاتورة البيع', maxLines: 2),
+                        const SizedBox(height: 14),
+                        const Text('نص اسفل التقارير قياس A4', style: TextStyle(fontSize: 15)),
+                        const SizedBox(height: 6),
+                        _roundedField(controller: _a4FooterCtrl, hint: 'نص اسفل التقارير قياس A4', maxLines: 2),
+                        const SizedBox(height: 10),
+                        _numberRow('موقع النص الارتفاع', _heightPosCtrl),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('نوع الطابعه', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                              _typeRadio('PDF', 'A4'),
+                              _typeRadio('Bluetooth', '58/80mm'),
+                              _typeRadio('WIFI', '58/80mm'),
+                              _typeRadio('USB', '58/80mm'),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.grey.shade300,
+                                foregroundColor: Colors.black87,
+                                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+                              ),
+                              onPressed: _searchPrinterDialog,
+                              child: const Text('بحث'),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: _roundedField(
+                                controller: _printerAddressCtrl,
+                                hint: 'عنوان الطابعه',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            const Expanded(flex: 5, child: Text('حجم ورق الطابعه الحراريه', style: TextStyle(fontSize: 15))),
+                            Expanded(
+                              flex: 5,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  Radio<String>(
+                                    value: '58mm',
+                                    groupValue: _thermalPaperSize,
+                                    onChanged: (v) => setState(() => _thermalPaperSize = v ?? '58mm'),
+                                  ),
+                                  const Text('58mm'),
+                                  Radio<String>(
+                                    value: '80mm',
+                                    groupValue: _thermalPaperSize,
+                                    onChanged: (v) => setState(() => _thermalPaperSize = v ?? '80mm'),
+                                  ),
+                                  const Text('80mm'),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Divider(),
+                        _dropdownRow('عدد نسخ الفاتورة', _invoiceCopies, const [1, 2, 3, 4, 5], (v) => setState(() => _invoiceCopies = v ?? 1)),
+                        _dropdownRow('موديل الطابعه الحراريه', _thermalPrinterModel, const [1, 2, 3, 4, 5], (v) => setState(() => _thermalPrinterModel = v ?? 1)),
+                        _dropdownRow('موديل طابعة الباركود', _barcodePrinterModel, const [1, 2, 3, 4, 5], (v) => setState(() => _barcodePrinterModel = v ?? 1)),
+                        _dropdownRow('امر قص الورق', _paperCutCommand, const [0, 1, 2, 3], (v) => setState(() => _paperCutCommand = v ?? 0)),
+                        _dropdownRow('امر فتح الدرج', _cashDrawerCommand, const [0, 1, 2, 3], (v) => setState(() => _cashDrawerCommand = v ?? 0)),
+                        const Divider(),
+                        _numberRow('حجم الخط', _fontSizeCtrl),
+                        _numberRow('الهامش الايمن', _rightMarginCtrl),
+                        _numberRow('الهامش الاسفل', _bottomMarginCtrl),
+                        const SizedBox(height: 8),
+                        _switchRow('اظهار عنوان العميل ورقم تلفونه في الفاتورة', _showCustomerInfo, (v) => setState(() => _showCustomerInfo = v)),
+                        _switchRow('اظهار مديونيه العميل السابقه في الفاتورة', _showPrevDebt, (v) => setState(() => _showPrevDebt = v)),
+                        _switchRow('طباعه اسم المنتج في صف مستقل', _productSeparateRow, (v) => setState(() => _productSeparateRow = v)),
+                        _switchRow('عرض تاريخ الانتهاء في فاتورة المبيعات A4', _showExpiryA4, (v) => setState(() => _showExpiryA4 = v)),
+                        _switchRow('عرض رقم المنتج في فاتورة المبيعات A4', _showProdNumA4, (v) => setState(() => _showProdNumA4 = v)),
+                        _switchRow('اظهار وصف المنتج في الفاتورة', _showProdDesc, (v) => setState(() => _showProdDesc = v)),
+                        _switchRow('اختيار قياس A4 عند ارسال فاتورة البيع', _selectA4OnSend, (v) => setState(() => _selectA4OnSend = v)),
+                        _switchRow('طباعة الفاتورة مباشرة بعد الحفظ', _autoPrintAfterSave, (v) => setState(() => _autoPrintAfterSave = v)),
+                        _switchRow('اظهار QR الضريبه في فاتوره البيع', _showTaxQr, (v) => setState(() => _showTaxQr = v)),
+                        _switchRow('اظهار صورة المنتج في فاتورة البيع', _showProdImage, (v) => setState(() => _showProdImage = v)),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            const Expanded(child: Text('تعديل مسميات الفاتورة', style: TextStyle(fontSize: 15))),
+                            SizedBox(
+                              width: 150,
+                              height: 42,
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.grey.shade300,
+                                  foregroundColor: Colors.black87,
+                                ),
+                                onPressed: _editLabelsDialog,
+                                child: const Text('تعديل'),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
+                ),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade200,
+                    border: Border(top: BorderSide(color: Colors.grey.shade400)),
+                  ),
+                  child: SizedBox(
+                    height: 46,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey.shade300,
+                        foregroundColor: Colors.black87,
+                      ),
+                      onPressed: _saving ? null : _saveSettings,
+                      child: Text(
+                        _saving ? 'جاري الحفظ...' : 'حفظ',
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
 class CashboxScreen extends StatefulWidget {
   const CashboxScreen({super.key});
 
@@ -4127,7 +4645,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
   double _paymentsTotal = 0.0;
   double _expensesTotal = 0.0;
   double _cashInBox = 0.0;
-  List<DbRow> _entries = [];
+  DbRows _entries = [];
 
   @override
   void initState() {
@@ -4167,7 +4685,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
       _paymentsTotal = (data['paymentsTotal'] as num?)?.toDouble() ?? 0.0;
       _expensesTotal = (data['expensesTotal'] as num?)?.toDouble() ?? 0.0;
       _cashInBox = (data['cashInBox'] as num?)?.toDouble() ?? 0.0;
-      _entries = (data['entries'] as List<DbRow>?) ?? [];
+      _entries = (data['entries'] as DbRows?) ?? [];
       _loading = false;
     });
   }
@@ -4522,9 +5040,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   double _totalPurchases = 0.0;
   double _totalExpenses = 0.0;
   double _realNetProfit = 0.0;
-  List<DbRow> _recentInvoices = [];
-  List<DbRow> _expenses = [];
-  List<DbRow> _lowStock = [];
+  DbRows _recentInvoices = [];
+  DbRows _expenses = [];
+  DbRows _lowStock = [];
 
   @override
   void initState() {
@@ -4578,7 +5096,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _exportInvoicesCsv() async {
-    final rows = <List<dynamic>>[
+    final CsvTable rows = [
       ['رقم المستند', 'النوع', 'التاريخ', 'الإجمالي الصافي', 'الخصم', 'طريقة الدفع'],
       ..._recentInvoices.map((inv) => [
             inv['invoice_number'] ?? '',
@@ -4597,7 +5115,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _exportExpensesCsv() async {
-    final rows = <List<dynamic>>[
+    final CsvTable rows = [
       ['البيان', 'التصنيف', 'المبلغ', 'التاريخ', 'ملاحظات'],
       ..._expenses.map((exp) => [
             exp['title'] ?? '',
@@ -4724,9 +5242,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       _totalPurchases = (summary['totalPurchases'] as num?)?.toDouble() ?? 0.0;
       _totalExpenses = (summary['totalExpenses'] as num?)?.toDouble() ?? 0.0;
       _realNetProfit = (summary['realNetProfit'] as num?)?.toDouble() ?? 0.0;
-      _recentInvoices = (summary['recentInvoices'] as List<DbRow>?) ?? [];
-      _expenses = (summary['expenses'] as List<DbRow>?) ?? [];
-      _lowStock = (summary['lowStockProducts'] as List<DbRow>?) ?? [];
+      _recentInvoices = (summary['recentInvoices'] as DbRows?) ?? [];
+      _expenses = (summary['expenses'] as DbRows?) ?? [];
+      _lowStock = (summary['lowStockProducts'] as DbRows?) ?? [];
       _loading = false;
     });
   }
@@ -5001,7 +5519,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(
-                                      '${((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
+                                      ((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
                                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                                     ),
                                     const SizedBox(width: 4),
@@ -5347,7 +5865,7 @@ class ContactsScreen extends StatefulWidget {
 
 class _ContactsScreenState extends State<ContactsScreen> {
   String _activeType = 'customer';
-  List<DbRow> _contacts = [];
+  DbRows _contacts = [];
   String _search = '';
   bool _loading = true;
 
@@ -5367,7 +5885,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
-  List<DbRow> get _filteredContacts {
+  DbRows get _filteredContacts {
     final q = _search.trim().toLowerCase();
     if (q.isEmpty) return _contacts;
     return _contacts.where((c) {
@@ -5564,7 +6082,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   return;
                 }
 
-                final row = <String, dynamic>{
+                final DbRow row = {
                   'code': codeCtrl.text.trim().isEmpty ? null : codeCtrl.text.trim(),
                   'barcode': barcodeCtrl.text.trim().isEmpty ? null : barcodeCtrl.text.trim(),
                   'name': name,
@@ -5820,9 +6338,9 @@ class PurchasesScreen extends StatefulWidget {
 }
 
 class _PurchasesScreenState extends State<PurchasesScreen> {
-  List<DbRow> _products = [];
-  List<DbRow> _suppliers = [];
-  List<DbRow> _items = [];
+  DbRows _products = [];
+  DbRows _suppliers = [];
+  DbRows _items = [];
   int? _selectedSupplierId;
   String _paymentMethod = 'نقدي';
   String _search = '';
@@ -5857,7 +6375,7 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
     });
   }
 
-  List<DbRow> get _filteredProducts {
+  DbRows get _filteredProducts {
     final q = _search.trim().toLowerCase();
     if (q.isEmpty) return _products;
     return _products.where((item) {
@@ -6334,10 +6852,10 @@ class PosScreen extends StatefulWidget {
 }
 
 class _PosScreenState extends State<PosScreen> {
-  List<DbRow> _products = [];
-  List<DbRow> _categories = [];
-  List<DbRow> _customers = [];
-  List<DbRow> _cart = [];
+  DbRows _products = [];
+  DbRows _categories = [];
+  DbRows _customers = [];
+  DbRows _cart = [];
   int? _selectedCustomerId;
   int? _selectedCategoryId;
   String _paymentMethod = 'نقدي';
@@ -6414,7 +6932,7 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  List<DbRow> get _filteredProducts {
+  DbRows get _filteredProducts {
     final q = _search.trim().toLowerCase();
     return _products.where((item) {
       if (_selectedCategoryId != null && item['category_id'] != _selectedCategoryId) {
@@ -6859,8 +7377,8 @@ class ProductsScreen extends StatefulWidget {
 }
 
 class _ProductsScreenState extends State<ProductsScreen> {
-  List<DbRow> _allProducts = [];
-  List<DbRow> _categories = [];
+  DbRows _allProducts = [];
+  DbRows _categories = [];
   int? _selectedCategoryId;
   String _searchQuery = '';
   bool _loading = true;
@@ -6982,7 +7500,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   Future<void> _exportProductsCsv() async {
-    final rows = <List<dynamic>>[
+    final CsvTable rows = [
       [
         'المعرف',
         'الباركود',
@@ -7016,7 +7534,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     );
   }
 
-  List<DbRow> get _filteredProducts {
+  DbRows get _filteredProducts {
     final q = _searchQuery.trim().toLowerCase();
     return _allProducts.where((item) {
       if (_selectedCategoryId != null && item['category_id'] != _selectedCategoryId) {
@@ -7250,7 +7768,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   }
 
                   final barcodeText = barcodeController.text.trim();
-                  final row = <String, dynamic>{
+                  final DbRow row = {
                     'name': name,
                     'category_id': chosenCategoryId,
                     'barcode': barcodeText.isEmpty ? null : barcodeText,
