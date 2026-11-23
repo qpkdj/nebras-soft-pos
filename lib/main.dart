@@ -1782,6 +1782,38 @@ class _BackupScreenState extends State<BackupScreen> {
     }
   }
 
+  Future<void> _shareBackupFile(File file) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      if (!await file.exists()) return;
+      final bytes = await file.readAsBytes();
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: p.basename(file.path),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteBackupFile(File file) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+      await _loadBackupInfo();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حذف النسخة الاحتياطية')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _restoreBackup(File backupFile) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -1864,14 +1896,30 @@ class _BackupScreenState extends State<BackupScreen> {
           else
             ..._backups.map((entity) {
               final name = p.basename(entity.path);
+              final file = File(entity.path);
               return Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
                   leading: const Icon(Icons.storage, color: Color(0xFF334155)),
                   title: Text(name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                  trailing: TextButton(
-                    onPressed: _busy ? null : () => _restoreBackup(File(entity.path)),
-                    child: const Text('استعادة'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        onPressed: _busy ? null : () => _restoreBackup(file),
+                        child: const Text('استعادة'),
+                      ),
+                      IconButton(
+                        tooltip: 'مشاركة الملف خارج التطبيق',
+                        icon: const Icon(Icons.share, size: 20, color: Color(0xFF0369A1)),
+                        onPressed: _busy ? null : () => _shareBackupFile(file),
+                      ),
+                      IconButton(
+                        tooltip: 'حذف النسخة',
+                        icon: const Icon(Icons.delete_outline, size: 20, color: Colors.redAccent),
+                        onPressed: _busy ? null : () => _deleteBackupFile(file),
+                      ),
+                    ],
                   ),
                 ),
               );
