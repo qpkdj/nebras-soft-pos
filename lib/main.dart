@@ -2312,6 +2312,10 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   static const String _appVersion = 'v1.6.0';
+  static const String _whatsappUrl = 'https://wa.me/967735114406';
+  static const String _telegramUrl = 'https://t.me/softnebras';
+  static const String _youtubeUrl = 'https://youtube.com/@nebras-soft?si=KALKhHKx4ya-97xJ';
+  static const String _githubUrl = 'https://github.com/qpkdj';
 
   int _productsCount = 0;
   String _shopName = 'نبراس SofT لنقاط البيع';
@@ -2435,6 +2439,109 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       _refreshStats();
     }
+  }
+
+  Future<void> _triggerChannelAction({
+    required BuildContext dialogContext,
+    required String targetUrl,
+    required String feedbackMessage,
+  }) async {
+    await Clipboard.setData(ClipboardData(text: targetUrl));
+    if (dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(feedbackMessage)),
+    );
+  }
+
+  Future<void> _showContactDeveloperDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('التواصل مع المطور', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0x2216A34A),
+                  child: Icon(Icons.business_center, color: Color(0xFF16A34A)),
+                ),
+                title: const Text('التواصل واتساب أعمال', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                trailing: const Icon(Icons.chat_bubble_outline, color: Color(0xFF16A34A)),
+                onTap: () => _triggerChannelAction(
+                  dialogContext: ctx,
+                  targetUrl: _whatsappUrl,
+                  feedbackMessage: 'تم تجهيز رابط واتساب أعمال للمطور',
+                ),
+              ),
+            ),
+            Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0x220369A1),
+                  child: Icon(Icons.send, color: Color(0xFF0369A1)),
+                ),
+                title: const Text('مراسلة المطور عن طريق التليجرام', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                trailing: const Icon(Icons.open_in_new, size: 18, color: Color(0xFF0369A1)),
+                onTap: () => _triggerChannelAction(
+                  dialogContext: ctx,
+                  targetUrl: _telegramUrl,
+                  feedbackMessage: 'تم تجهيز قناة مراسلة المطور على تليجرام',
+                ),
+              ),
+            ),
+            Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0x22DC2626),
+                  child: Icon(Icons.smart_display, color: Color(0xFFDC2626)),
+                ),
+                title: const Text('تابع قناة المطور على يوتيوب', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                trailing: const Icon(Icons.play_arrow_rounded, size: 24, color: Color(0xFFDC2626)),
+                onTap: () => _triggerChannelAction(
+                  dialogContext: ctx,
+                  targetUrl: _youtubeUrl,
+                  feedbackMessage: 'تم تجهيز رابط قناة المطور على يوتيوب',
+                ),
+              ),
+            ),
+            Card(
+              margin: EdgeInsets.zero,
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0x22334155),
+                  child: Icon(Icons.code, color: Color(0xFF334155)),
+                ),
+                title: const Text(
+                  'لمتابعة مشاريع المطور على منصة GitHub اضغط هنا ( github )',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Color(0xFF334155)),
+                onTap: () => _triggerChannelAction(
+                  dialogContext: ctx,
+                  targetUrl: _githubUrl,
+                  feedbackMessage: 'تم تجهيز رابط منصة GitHub للمطور',
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showPinSetupDialog() async {
@@ -2640,45 +2747,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               }
             },
             child: const Text('نسخ Device ID'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('إغلاق'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _showContactDeveloperDialog() async {
-    const devInfo = 'فريق نبراس SofT — دعم فني وتطوير أنظمة نقاط البيع';
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('التواصل مع المطور', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('النظام: Nebras SofT Pos'),
-            SizedBox(height: 6),
-            Text('المطور: نبراس SofT'),
-            SizedBox(height: 6),
-            Text('للدعم الفني والطلبات المخصصة يرجى التواصل عبر قنوات نبراس SofT المعتمدة.'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await Clipboard.setData(const ClipboardData(text: devInfo));
-              if (ctx.mounted) {
-                Navigator.of(ctx).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('تم نسخ بيانات المطور إلى الحافظة')),
-                );
-              }
-            },
-            child: const Text('نسخ البيانات'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -4534,7 +4602,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           decoration: const InputDecoration(
                             labelText: 'سقف الآجل',
-                            border: const OutlineInputBorder(),
+                            border: OutlineInputBorder(),
                           ),
                         ),
                       ),
@@ -4545,7 +4613,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
                             labelText: 'مهلة السداد (يوم)',
-                            border: const OutlineInputBorder(),
+                            border: OutlineInputBorder(),
                           ),
                         ),
                       ),
