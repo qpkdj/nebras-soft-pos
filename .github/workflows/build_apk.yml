@@ -49,10 +49,22 @@ jobs:
               gtxt = re.sub(r"(compileSdk(?:Version)?)\s*(?:=|\()\s*[^\r\n\)]+\)?", r"\1 = 36", gtxt)
               gtxt = re.sub(r"(targetSdk(?:Version)?)\s*(?:=|\()\s*[^\r\n\)]+\)?", r"\1 = 36", gtxt)
               gradle_p.write_text(gtxt, encoding="utf-8")
-              print("--- Updated android/app/build.gradle.kts ---")
-              for line in gtxt.splitlines():
-                  if "Sdk" in line or "sdk" in line:
-                      print(line)
+
+          root_gradle_p = Path("android/build.gradle.kts")
+          if root_gradle_p.exists():
+              rtxt = root_gradle_p.read_text(encoding="utf-8")
+              lib_fix = """
+          subprojects {
+              plugins.withId("com.android.library") {
+                  extensions.configure<com.android.build.gradle.LibraryExtension> {
+                      compileSdk = 36
+                  }
+              }
+          }
+          """
+              if "com.android.library" not in rtxt:
+                  rtxt = rtxt + "\n" + lib_fix
+                  root_gradle_p.write_text(rtxt, encoding="utf-8")
           '
           flutter pub get
           if [ -f "assets/icon/app_icon.png" ] && (grep -q "^flutter_launcher_icons:" pubspec.yaml || [ -f "flutter_launcher_icons.yaml" ]); then
