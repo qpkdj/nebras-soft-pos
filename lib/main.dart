@@ -287,6 +287,21 @@ class DatabaseHelper {
     });
   }
 
+  String _describeInvoiceType(String type, String method) {
+    switch (type) {
+      case 'sale':
+        return 'فاتورة مبيعات ($method)';
+      case 'purchase':
+        return 'فاتورة مشتريات ($method)';
+      case 'sale_return':
+        return 'مرتجع مبيعات ($method)';
+      case 'purchase_return':
+        return 'مرتجع مشتريات ($method)';
+      default:
+        return 'حركة فاتورة ($method)';
+    }
+  }
+
   Future getContactStatementData(int contactId) async {
     final db = await instance.database;
     final contactRows = await db.query(
@@ -316,15 +331,15 @@ class DatabaseHelper {
     final List<DbRow> movements = [];
 
     for (final inv in invoices) {
-      final isSale = inv['type'] == 'sale';
+      final invType = (inv['type'] ?? '').toString();
       final method = (inv['payment_method'] ?? '').toString();
       final total = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
       movements.add({
         'date': (inv['date'] ?? '').toString(),
         'reference': (inv['invoice_number'] ?? '').toString(),
-        'description': isSale ? 'فاتورة مبيعات ($method)' : 'فاتورة مشتريات ($method)',
+        'description': _describeInvoiceType(invType, method),
         'amount': total,
-        'kind': isSale ? 'sale' : 'purchase',
+        'kind': invType,
       });
     }
 
@@ -546,6 +561,110 @@ class DatabaseHelper {
     return invoiceNumber;
   }
 
+  Future<String> createReturnFromInvoice({
+    required String originalInvoiceNumber,
+    required List<DbRow> returnItems,
+  }) async {
+    final db = await instance.database;
+    final details = await getInvoiceDetailsByNumber(originalInvoiceNumber);
+    if (details.isEmpty) {
+      throw Exception('الفاتورة الأصلية غير موجودة');
+    }
+
+    final originalInv = details['invoice'] as DbRow;
+    final String origType = (originalInv['type'] ?? '').toString();
+    final bool isSaleReturn = origType == 'sale' || origType == 'sale_return';
+    final String returnType = isSaleReturn ? 'sale_return' : 'purchase_return';
+    final String paymentMethod = (originalInv['payment_method'] ?? 'نقدي').toString();
+    final int? contactId = originalInv['contact_id'] as int?;
+
+    double returnTotal = 0.0;
+    for (final item in returnItems) {
+      final double qty = (item['return_qty'] as num?)?.toDouble() ?? 0.0;
+      final double price = (item['price'] as num?)?.toDouble() ?? 0.0;
+      if (qty > 0) {
+        returnTotal += qty * price;
+      }
+    }
+
+    if (returnTotal <= 0) {
+      throw Exception('يرجى تحديد كمية مرتجعة أكبر من صفر');
+    }
+
+    final now = DateTime.now();
+    final returnNumber = 'RET-${now.millisecondsSinceEpoch}';
+
+    await db.transaction((txn) async {
+      final returnInvId = await txn.insert('invoices', {
+        'invoice_number': returnNumber,
+        'contact_id': contactId,
+        'type': returnType,
+        'date': now.toIso8601String(),
+        'total_amount': returnTotal,
+        'discount': 0.0,
+        'tax': 0.0,
+        'paid_amount': paymentMethod == 'نقدي' ? returnTotal : 0.0,
+        'payment_method': paymentMethod,
+        'user_id': 1,
+      });
+
+      for (final item in returnItems) {
+        final int productId = item['product_id'] as int;
+        final double retQty = (item['return_qty'] as num?)?.toDouble() ?? 0.0;
+        final double price = (item['price'] as num?)?.toDouble() ?? 0.0;
+        if (retQty <= 0) continue;
+
+        await txn.insert('invoice_items', {
+          'invoice_id': returnInvId,
+          'product_id': productId,
+          'quantity': retQty,
+          'price': price,
+          'total': retQty * price,
+        });
+
+        final prodRows = await txn.query(
+          'products',
+          columns: ['stock_quantity'],
+          where: 'id = ?',
+          whereArgs: [productId],
+        );
+        if (prodRows.isNotEmpty) {
+          final currentStock = (prodRows.first['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+          final nextStock = isSaleReturn
+              ? (currentStock + retQty)
+              : ((currentStock - retQty) < 0 ? 0.0 : (currentStock - retQty));
+          await txn.update(
+            'products',
+            {'stock_quantity': nextStock},
+            where: 'id = ?',
+            whereArgs: [productId],
+          );
+        }
+      }
+
+      if (contactId != null) {
+        final contactRows = await txn.query(
+          'contacts',
+          columns: ['balance'],
+          where: 'id = ?',
+          whereArgs: [contactId],
+        );
+        if (contactRows.isNotEmpty) {
+          final oldBalance = (contactRows.first['balance'] as num?)?.toDouble() ?? 0.0;
+          final nextBalance = (oldBalance - returnTotal) < 0 ? 0.0 : (oldBalance - returnTotal);
+          await txn.update(
+            'contacts',
+            {'balance': nextBalance},
+            where: 'id = ?',
+            whereArgs: [contactId],
+          );
+        }
+      }
+    });
+
+    return returnNumber;
+  }
+
   Future<DbRow> getInvoiceDetailsByNumber(String invoiceNumber) async {
     final db = await instance.database;
     final invRows = await db.rawQuery('''
@@ -582,8 +701,14 @@ class DatabaseHelper {
     final salesRows = await db.rawQuery(
       "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'sale'",
     );
+    final saleReturnsRows = await db.rawQuery(
+      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'sale_return'",
+    );
     final purchasesRows = await db.rawQuery(
       "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'purchase'",
+    );
+    final purchaseReturnsRows = await db.rawQuery(
+      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'purchase_return'",
     );
     final cogsRows = await db.rawQuery('''
       SELECT COALESCE(SUM(ii.quantity * p.purchase_price), 0) AS cost
@@ -595,20 +720,25 @@ class DatabaseHelper {
     final recentInvoices = await db.query(
       'invoices',
       orderBy: 'id DESC',
-      limit: 20,
+      limit: 25,
     );
     final lowStockProducts = await db.rawQuery(
       'SELECT * FROM products WHERE is_active = 1 AND stock_quantity <= min_stock ORDER BY stock_quantity ASC',
     );
 
-    final totalSales = (salesRows.first['total'] as num?)?.toDouble() ?? 0.0;
-    final totalPurchases = (purchasesRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    final rawSales = (salesRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    final saleReturns = (saleReturnsRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    final rawPurchases = (purchasesRows.first['total'] as num?)?.toDouble() ?? 0.0;
+    final purchaseReturns = (purchaseReturnsRows.first['total'] as num?)?.toDouble() ?? 0.0;
     final totalCogs = (cogsRows.first['cost'] as num?)?.toDouble() ?? 0.0;
-    final grossProfit = totalSales - totalCogs;
+
+    final netSales = (rawSales - saleReturns) < 0 ? 0.0 : (rawSales - saleReturns);
+    final netPurchases = (rawPurchases - purchaseReturns) < 0 ? 0.0 : (rawPurchases - purchaseReturns);
+    final grossProfit = netSales - totalCogs;
 
     return {
-      'totalSales': totalSales,
-      'totalPurchases': totalPurchases,
+      'totalSales': netSales,
+      'totalPurchases': netPurchases,
       'totalCogs': totalCogs,
       'grossProfit': grossProfit,
       'recentInvoices': recentInvoices,
@@ -716,6 +846,21 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 }
 
 class ThermalPdfService {
+  static String _invoiceTitleArabic(String type) {
+    switch (type) {
+      case 'sale':
+        return 'فاتورة مبيعات';
+      case 'purchase':
+        return 'فاتورة مشتريات';
+      case 'sale_return':
+        return 'إشعار مرتجع مبيعات';
+      case 'purchase_return':
+        return 'إشعار مرتجع مشتريات';
+      default:
+        return 'فاتورة';
+    }
+  }
+
   static Future<Uint8List> buildReceiptPdf({
     required DbRow invoice,
     required List<DbRow> items,
@@ -733,7 +878,8 @@ class ThermalPdfService {
     );
 
     final pageFormat = is80mm ? PdfPageFormat.roll80 : PdfPageFormat.roll57;
-    final bool isSale = invoice['type'] == 'sale';
+    final String invType = (invoice['type'] ?? 'sale').toString();
+    final bool isCustomerSide = invType == 'sale' || invType == 'sale_return';
     final String shopName = (settings['shop_name'] ?? 'نبراس SofT لنقاط البيع').trim();
     final String shopPhone = (settings['shop_phone'] ?? '').trim();
     final String shopAddress = (settings['shop_address'] ?? '').trim();
@@ -742,7 +888,7 @@ class ThermalPdfService {
     final String invNum = (invoice['invoice_number'] ?? '').toString();
     final String rawDate = (invoice['date'] ?? '').toString();
     final String formattedDate = rawDate.replaceFirst('T', ' ').split('.').first;
-    final String contactName = (invoice['contact_name'] ?? (isSale ? 'عميل نقدي عام' : 'مورد نقدي عام')).toString();
+    final String contactName = (invoice['contact_name'] ?? (isCustomerSide ? 'عميل نقدي عام' : 'مورد نقدي عام')).toString();
     final String payMethod = (invoice['payment_method'] ?? 'نقدي').toString();
     final double netTotal = (invoice['total_amount'] as num?)?.toDouble() ?? 0.0;
     final double discount = (invoice['discount'] as num?)?.toDouble() ?? 0.0;
@@ -777,16 +923,16 @@ class ThermalPdfService {
                   ),
                 pw.SizedBox(height: 3),
                 pw.Text(
-                  isSale ? 'فاتورة مبيعات' : 'فاتورة مشتريات',
+                  _invoiceTitleArabic(invType),
                   textAlign: pw.TextAlign.center,
                   style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold),
                 ),
                 pw.SizedBox(height: 4),
                 pw.Divider(thickness: 0.8),
-                pw.Text('رقم الفاتورة: $invNum', style: const pw.TextStyle(fontSize: 8.5)),
+                pw.Text('رقم المستند: $invNum', style: const pw.TextStyle(fontSize: 8.5)),
                 pw.Text('التاريخ: $formattedDate', style: const pw.TextStyle(fontSize: 8.5)),
                 pw.Text(
-                  '${isSale ? 'العميل' : 'المورد'}: $contactName',
+                  '${isCustomerSide ? 'العميل' : 'المورد'}: $contactName',
                   style: const pw.TextStyle(fontSize: 8.5),
                 ),
                 pw.Text('طريقة الدفع: $payMethod', style: const pw.TextStyle(fontSize: 8.5)),
@@ -893,7 +1039,7 @@ class ThermalPdfService {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
                     pw.Text(
-                      'الصافي المستحق:',
+                      'الصافي:',
                       style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
                     ),
                     pw.Text(
@@ -1220,9 +1366,199 @@ class ThermalPdfService {
     );
   }
 
-  static Future<void> showInvoiceActionSheet(BuildContext context, String invoiceNumber) async {
-    bool is80mm = true;
+  static Future<void> showReturnDialog(
+    BuildContext context,
+    String invoiceNumber, {
+    VoidCallback? onReturnSaved,
+  }) async {
+    final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
+    if (details.isEmpty || !context.mounted) return;
 
+    final inv = details['invoice'] as DbRow;
+    final rawItems = (details['items'] as List<DbRow>?) ?? [];
+    if (rawItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا توجد أصناف قابلة للإرجاع في هذه الفاتورة')),
+      );
+      return;
+    }
+
+    final String origType = (inv['type'] ?? 'sale').toString();
+    final bool isSaleSide = origType == 'sale' || origType == 'sale_return';
+
+    final List<DbRow> editableItems = rawItems.map((it) {
+      final double maxQty = (it['quantity'] as num?)?.toDouble() ?? 0.0;
+      final double price = (it['price'] as num?)?.toDouble() ?? 0.0;
+      return {
+        'product_id': it['product_id'],
+        'name': (it['name'] ?? '').toString(),
+        'max_qty': maxQty,
+        'return_qty': maxQty,
+        'price': price,
+      };
+    }).toList();
+
+    bool submitting = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          double calcTotal() {
+            double sum = 0.0;
+            for (final it in editableItems) {
+              final q = (it['return_qty'] as num?)?.toDouble() ?? 0.0;
+              final pPrice = (it['price'] as num?)?.toDouble() ?? 0.0;
+              if (q > 0) sum += q * pPrice;
+            }
+            return sum;
+          }
+
+          return AlertDialog(
+            title: Text(
+              isSaleSide ? 'مرتجع مبيعات من $invoiceNumber' : 'مرتجع مشتريات من $invoiceNumber',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ...editableItems.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final it = entry.value;
+                      final double maxQty = (it['max_qty'] as num).toDouble();
+                      final double retQty = (it['return_qty'] as num).toDouble();
+                      final double price = (it['price'] as num).toDouble();
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                it['name'].toString(),
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'سعر الوحدة: ${price.toStringAsFixed(2)} • أقصى كمية في الفاتورة: $maxQty',
+                                style: const TextStyle(fontSize: 12, color: Colors.black54),
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.remove_circle_outline),
+                                    onPressed: submitting
+                                        ? null
+                                        : () {
+                                            if (retQty > 0) {
+                                              setDialogState(() {
+                                                editableItems[idx]['return_qty'] =
+                                                    (retQty - 1) < 0 ? 0.0 : (retQty - 1);
+                                              });
+                                            }
+                                          },
+                                  ),
+                                  Text(
+                                    'مرتجع: $retQty',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.add_circle_outline),
+                                    onPressed: submitting
+                                        ? null
+                                        : () {
+                                            if (retQty + 1 <= maxQty) {
+                                              setDialogState(() {
+                                                editableItems[idx]['return_qty'] = retQty + 1;
+                                              });
+                                            }
+                                          },
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                    const Divider(),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('إجمالي المرتجع:', style: TextStyle(fontWeight: FontWeight.bold)),
+                        Text(
+                          calcTotal().toStringAsFixed(2),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Color(0xFFDC2626),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.of(ctx).pop(),
+                child: const Text('إلغاء'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+                onPressed: submitting || calcTotal() <= 0
+                    ? null
+                    : () async {
+                        setDialogState(() => submitting = true);
+                        try {
+                          final retNum = await DatabaseHelper.instance.createReturnFromInvoice(
+                            originalInvoiceNumber: invoiceNumber,
+                            returnItems: editableItems,
+                          );
+                          if (!ctx.mounted) return;
+                          Navigator.of(ctx).pop();
+                          onReturnSaved?.call();
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('تم حفظ المرتجع رقم $retNum وتحديث المخزون والرصيد')),
+                          );
+                          await showInvoiceActionSheet(context, retNum);
+                        } catch (_) {
+                          if (ctx.mounted) {
+                            setDialogState(() => submitting = false);
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              const SnackBar(content: Text('تعذر حفظ المرتجع، تحقق من الكميات')),
+                            );
+                          }
+                        }
+                      },
+                child: Text(submitting ? 'جاري الحفظ...' : 'تأكيد المرتجع'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  static Future<void> showInvoiceActionSheet(
+    BuildContext context,
+    String invoiceNumber, {
+    VoidCallback? onReturnSaved,
+  }) async {
+    bool is80mm = true;
+    final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
+    final invType = ((details['invoice'] as DbRow?)?['type'] ?? '').toString();
+    final bool canReturn = invType == 'sale' || invType == 'purchase';
+
+    if (!context.mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -1237,7 +1573,7 @@ class ThermalPdfService {
               const Icon(Icons.receipt_long, size: 40, color: Color(0xFF1545B5)),
               const SizedBox(height: 8),
               Text(
-                'فاتورة رقم: $invoiceNumber',
+                'مستند رقم: $invoiceNumber',
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               const SizedBox(height: 12),
@@ -1261,7 +1597,7 @@ class ThermalPdfService {
                         await printThermalInvoice(context, invoiceNumber, is80mm: is80mm);
                       },
                       icon: const Icon(Icons.print),
-                      label: const Text('طباعة حرارية / PDF'),
+                      label: const Text('طباعة / PDF'),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1277,6 +1613,29 @@ class ThermalPdfService {
                   ),
                 ],
               ),
+              if (canReturn) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFDC2626),
+                    ),
+                    onPressed: () async {
+                      Navigator.of(ctx).pop();
+                      await showReturnDialog(
+                        context,
+                        invoiceNumber,
+                        onReturnSaved: onReturnSaved,
+                      );
+                    },
+                    icon: const Icon(Icons.assignment_return),
+                    label: Text(
+                      invType == 'sale' ? 'إنشاء مرتجع مبيعات من الفاتورة' : 'إنشاء مرتجع مشتريات من الفاتورة',
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
             ],
           ),
@@ -1700,6 +2059,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
     });
   }
 
+  String _typeBadgeLabel(String type) {
+    switch (type) {
+      case 'sale':
+        return 'بيع';
+      case 'purchase':
+        return 'شراء';
+      case 'sale_return':
+        return 'مرتجع بيع';
+      case 'purchase_return':
+        return 'مرتجع شراء';
+      default:
+        return type;
+    }
+  }
+
   Widget _buildStatCard(String title, double value, Color color) {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -1756,8 +2130,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     mainAxisSpacing: 10,
                     childAspectRatio: 1.55,
                     children: [
-                      _buildStatCard('إجمالي المبيعات', _totalSales, const Color(0xFF1545B5)),
-                      _buildStatCard('إجمالي المشتريات', _totalPurchases, const Color(0xFFD97706)),
+                      _buildStatCard('صافي المبيعات', _totalSales, const Color(0xFF1545B5)),
+                      _buildStatCard('صافي المشتريات', _totalPurchases, const Color(0xFFD97706)),
                       _buildStatCard(
                         'صافي الربح التقديري',
                         _grossProfit,
@@ -1768,7 +2142,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                   ),
                   const SizedBox(height: 14),
                   const Text(
-                    'آخر الفواتير المسجلة (اضغط لطباعة أو مشاركة PDF)',
+                    'آخر الفواتير والمرتجعات (اضغط للطباعة أو المرتجع)',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                   ),
                   const SizedBox(height: 8),
@@ -1781,22 +2155,35 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     )
                   else
                     ..._recentInvoices.map((inv) {
-                      final isSale = inv['type'] == 'sale';
+                      final invType = (inv['type'] ?? '').toString();
+                      final isReturn = invType.endsWith('_return');
+                      final isSaleSide = invType.startsWith('sale');
                       final method = inv['payment_method']?.toString() ?? '';
                       final invNum = (inv['invoice_number'] ?? '').toString();
+
+                      final Color badgeColor = isReturn
+                          ? const Color(0xFFDC2626)
+                          : (isSaleSide ? const Color(0xFF1545B5) : const Color(0xFFD97706));
+
                       return Card(
                         margin: const EdgeInsets.only(bottom: 8),
                         child: ListTile(
-                          onTap: () => ThermalPdfService.showInvoiceActionSheet(context, invNum),
+                          onTap: () => ThermalPdfService.showInvoiceActionSheet(
+                            context,
+                            invNum,
+                            onReturnSaved: _loadReport,
+                          ),
                           leading: CircleAvatar(
-                            backgroundColor: (isSale ? Colors.blue : Colors.orange).withAlpha(25),
+                            backgroundColor: badgeColor.withAlpha(25),
                             child: Icon(
-                              isSale ? Icons.arrow_upward : Icons.arrow_downward,
-                              color: isSale ? const Color(0xFF1545B5) : const Color(0xFFD97706),
+                              isReturn
+                                  ? Icons.assignment_return
+                                  : (isSaleSide ? Icons.arrow_upward : Icons.arrow_downward),
+                              color: badgeColor,
                             ),
                           ),
                           title: Text(
-                            '$invNum (${isSale ? 'بيع' : 'شراء'})',
+                            '$invNum (${_typeBadgeLabel(invType)})',
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                           subtitle: Text('الدفع: $method • ${inv['date'].toString().split('T').first}'),
@@ -1808,7 +2195,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                               ),
                               const SizedBox(width: 4),
-                              const Icon(Icons.print_outlined, size: 20, color: Colors.black54),
+                              const Icon(Icons.more_vert, size: 20, color: Colors.black54),
                             ],
                           ),
                         ),
