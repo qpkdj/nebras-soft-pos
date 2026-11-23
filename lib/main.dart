@@ -29,6 +29,145 @@ void main() {
   runApp(const NebrasPosApp());
 }
 
+class CountryCodeItem {
+  final String nameAr;
+  final String nameEn;
+  final String dialCode;
+  final String flag;
+
+  const CountryCodeItem({
+    required this.nameAr,
+    required this.nameEn,
+    required this.dialCode,
+    required this.flag,
+  });
+}
+
+const List<CountryCodeItem> kCountriesList = [
+  CountryCodeItem(nameAr: 'اليمن', nameEn: 'Yemen', dialCode: '+967', flag: '🇾🇪'),
+  CountryCodeItem(nameAr: 'السعودية', nameEn: 'Saudi Arabia', dialCode: '+966', flag: '🇸🇦'),
+  CountryCodeItem(nameAr: 'الإمارات', nameEn: 'UAE', dialCode: '+971', flag: '🇦🇪'),
+  CountryCodeItem(nameAr: 'مصر', nameEn: 'Egypt', dialCode: '+20', flag: '🇪🇬'),
+  CountryCodeItem(nameAr: 'الصومال', nameEn: 'Somalia', dialCode: '+252', flag: '🇸🇴'),
+  CountryCodeItem(nameAr: 'السودان', nameEn: 'Sudan', dialCode: '+249', flag: '🇸🇩'),
+  CountryCodeItem(nameAr: 'عُمان', nameEn: 'Oman', dialCode: '+968', flag: '🇴🇲'),
+  CountryCodeItem(nameAr: 'قطر', nameEn: 'Qatar', dialCode: '+974', flag: '🇶🇦'),
+  CountryCodeItem(nameAr: 'الكويت', nameEn: 'Kuwait', dialCode: '+965', flag: '🇰🇼'),
+  CountryCodeItem(nameAr: 'البحرين', nameEn: 'Bahrain', dialCode: '+973', flag: '🇧🇭'),
+  CountryCodeItem(nameAr: 'الأردن', nameEn: 'Jordan', dialCode: '+962', flag: '🇯🇴'),
+  CountryCodeItem(nameAr: 'العراق', nameEn: 'Iraq', dialCode: '+964', flag: '🇮🇶'),
+  CountryCodeItem(nameAr: 'سوريا', nameEn: 'Syria', dialCode: '+963', flag: '🇸🇾'),
+  CountryCodeItem(nameAr: 'لبنان', nameEn: 'Lebanon', dialCode: '+961', flag: '🇱🇧'),
+  CountryCodeItem(nameAr: 'فلسطين', nameEn: 'Palestine', dialCode: '+970', flag: '🇵🇸'),
+  CountryCodeItem(nameAr: 'ليبيا', nameEn: 'Libya', dialCode: '+218', flag: '🇱🇾'),
+  CountryCodeItem(nameAr: 'تونس', nameEn: 'Tunisia', dialCode: '+216', flag: '🇹🇳'),
+  CountryCodeItem(nameAr: 'الجزائر', nameEn: 'Algeria', dialCode: '+213', flag: '🇩🇿'),
+  CountryCodeItem(nameAr: 'المغرب', nameEn: 'Morocco', dialCode: '+212', flag: '🇲🇦'),
+  CountryCodeItem(nameAr: 'موريتانيا', nameEn: 'Mauritania', dialCode: '+222', flag: '🇲🇷'),
+  CountryCodeItem(nameAr: 'جيبوتي', nameEn: 'Djibouti', dialCode: '+253', flag: '🇩🇯'),
+  CountryCodeItem(nameAr: 'جزر القمر', nameEn: 'Comoros', dialCode: '+269', flag: '🇰🇲'),
+  CountryCodeItem(nameAr: 'إثيوبيا', nameEn: 'Ethiopia', dialCode: '+251', flag: '🇪🇹'),
+  CountryCodeItem(nameAr: 'كينيا', nameEn: 'Kenya', dialCode: '+254', flag: '🇰🇪'),
+  CountryCodeItem(nameAr: 'تركيا', nameEn: 'Turkey', dialCode: '+90', flag: '🇹🇷'),
+  CountryCodeItem(nameAr: 'ماليزيا', nameEn: 'Malaysia', dialCode: '+60', flag: '🇲🇾'),
+  CountryCodeItem(nameAr: 'إندونيسيا', nameEn: 'Indonesia', dialCode: '+62', flag: '🇮🇩'),
+  CountryCodeItem(nameAr: 'الهند', nameEn: 'India', dialCode: '+91', flag: '🇮🇳'),
+  CountryCodeItem(nameAr: 'باكستان', nameEn: 'Pakistan', dialCode: '+92', flag: '🇵🇰'),
+  CountryCodeItem(nameAr: 'أمريكا', nameEn: 'USA', dialCode: '+1', flag: '🇺🇸'),
+  CountryCodeItem(nameAr: 'بريطانيا', nameEn: 'UK', dialCode: '+44', flag: '🇬🇧'),
+  CountryCodeItem(nameAr: 'ألمانيا', nameEn: 'Germany', dialCode: '+49', flag: '🇩🇪'),
+  CountryCodeItem(nameAr: 'فرنسا', nameEn: 'France', dialCode: '+33', flag: '🇫🇷'),
+];
+
+class MarqueeBanner extends StatefulWidget {
+  final String text;
+
+  const MarqueeBanner({super.key, required this.text});
+
+  @override
+  State<MarqueeBanner> createState() => _MarqueeBannerState();
+}
+
+class _MarqueeBannerState extends State<MarqueeBanner> {
+  final ScrollController _scrollController = ScrollController();
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startScrolling());
+  }
+
+  void _startScrolling() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(milliseconds: 35), (_) {
+      if (!_scrollController.hasClients) return;
+      final maxExtent = _scrollController.position.maxScrollExtent;
+      if (maxExtent <= 0) return;
+      final nextOffset = _scrollController.offset + 1.2;
+      if (nextOffset >= maxExtent) {
+        _scrollController.jumpTo(0);
+      } else {
+        _scrollController.jumpTo(nextOffset);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 44,
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0F2C7E), Color(0xFF1D4ED8), Color(0xFF0D7C66)],
+          begin: Alignment.centerRight,
+          end: Alignment.centerLeft,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x330F2C7E),
+            blurRadius: 6,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Directionality(
+          textDirection: TextDirection.rtl,
+          child: ListView(
+            controller: _scrollController,
+            scrollDirection: Axis.horizontal,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              const SizedBox(width: 24),
+              Center(
+                child: Text(
+                  '${widget.text}        ★        ${widget.text}        ★        ',
+                  style: const TextStyle(
+                    color: Color(0xFFFEF08A),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class DeviceLicenseService {
   static const String appSecretSalt = 'NEBRAS_SOFT_POS_2026_SECRET_KEY_#967';
   static const String developerWhatsappUrl = 'https://wa.me/967735114406';
@@ -39,10 +178,33 @@ class DeviceLicenseService {
 
   static bool isValidUserName(String name) {
     final clean = name.trim();
-    if (clean.length < 2) return false;
-    final hasDigits = RegExp(r'[0-9٠-٩]').hasMatch(clean);
-    final hasLetters = RegExp(r'[a-zA-Z\u0621-\u064A]').hasMatch(clean);
-    return hasLetters && !hasDigits;
+    if (clean.isEmpty) return false;
+    // يسمح فقط بالحروف العربية والإنجليزية والمسافات (ممنوع النقاط أو الأرقام أو الرموز)
+    final onlyLettersAndSpaces = RegExp(r'^[a-zA-Z\u0621-\u064A\s]+$').hasMatch(clean);
+    final letterCount = clean.replaceAll(RegExp(r'\s+'), '').length;
+    return onlyLettersAndSpaces && letterCount >= 2;
+  }
+
+  static String formatYmd(DateTime date) {
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$y$m$d';
+  }
+
+  static String? extractExpiryYmd(String serial) {
+    final parts = serial.trim().toUpperCase().split('-');
+    if (parts.length != 5 || parts[0] != 'NSACT') return null;
+    final exp = parts[3];
+    if (!RegExp(r'^\d{8}$').hasMatch(exp)) return null;
+    return exp;
+  }
+
+  static bool isExpiryValid(String expiryYmd) {
+    if (expiryYmd == '00000000') return true;
+    if (!RegExp(r'^\d{8}$').hasMatch(expiryYmd)) return false;
+    final todayYmd = formatYmd(DateTime.now());
+    return todayYmd.compareTo(expiryYmd) <= 0;
   }
 
   static Future<String> getOrCreateDeviceFingerprint() async {
@@ -62,12 +224,14 @@ class DeviceLicenseService {
   static String generateExpectedSerial({
     required String fingerprint,
     required String phone,
+    required String expiryYmd,
   }) {
     final cleanFp = fingerprint.trim().toUpperCase();
     final cleanPhone = normalizePhone(phone);
-    final payload = '$appSecretSalt|SERIAL|$cleanFp|$cleanPhone';
-    final hashHex = sha256.convert(utf8.encode(payload)).toString().toUpperCase();
-    return 'NSACT-${hashHex.substring(0, 5)}-${hashHex.substring(5, 10)}-${hashHex.substring(10, 15)}';
+    final cleanExp = expiryYmd.trim().isEmpty ? '00000000' : expiryYmd.trim();
+    final payload = '$appSecretSalt|SERIAL|$cleanFp|$cleanPhone|$cleanExp';
+    final hex = sha256.convert(utf8.encode(payload)).toString().toUpperCase();
+    return 'NSACT-${hex.substring(0, 5)}-${hex.substring(5, 10)}-$cleanExp-${hex.substring(10, 14)}';
   }
 
   static Future<bool> isDeviceActivated() async {
@@ -81,6 +245,11 @@ class DeviceLicenseService {
       return false;
     }
 
+    final expiryYmd = extractExpiryYmd(savedSerial);
+    if (expiryYmd == null || !isExpiryValid(expiryYmd)) {
+      return false;
+    }
+
     final currentFp = await getOrCreateDeviceFingerprint();
     if (savedFp != currentFp) {
       return false;
@@ -89,6 +258,7 @@ class DeviceLicenseService {
     final expected = generateExpectedSerial(
       fingerprint: currentFp,
       phone: savedPhone,
+      expiryYmd: expiryYmd,
     );
     if (savedSerial != expected) {
       return false;
@@ -117,13 +287,28 @@ class DeviceLicenseService {
     final cleanSerial = serialInput.trim().toUpperCase();
 
     if (!isValidUserName(cleanName)) {
-      return {'ok': false, 'reason': 'يرجى إدخال الاسم الكامل بالحروف فقط بدون أرقام.'};
+      return {
+        'ok': false,
+        'reason': 'يرجى إدخال الاسم بالحروف العربية أو الإنجليزية فقط (ممنوع الأرقام أو النقاط أو الرموز).',
+      };
     }
-    if (cleanPhone.length < 6) {
-      return {'ok': false, 'reason': 'يرجى إدخال رقم هاتف صحيح.'};
+    if (cleanPhone.length < 7) {
+      return {'ok': false, 'reason': 'يرجى إدخال رقم هاتف صحيح مع مفتاح الدولة.'};
     }
     if (cleanSerial.isEmpty) {
       return {'ok': false, 'reason': 'يرجى إدخال سيريال التنشيط.'};
+    }
+
+    final expiryYmd = extractExpiryYmd(cleanSerial);
+    if (expiryYmd == null) {
+      return {'ok': false, 'reason': 'صيغة السيريال غير صحيحة.'};
+    }
+
+    if (!isExpiryValid(expiryYmd)) {
+      return {
+        'ok': false,
+        'reason': 'انتهت صلاحية هذا السيريال ($expiryYmd). يرجى طلب سيريال تجديد من المطور.',
+      };
     }
 
     final currentFp = await getOrCreateDeviceFingerprint();
@@ -152,6 +337,7 @@ class DeviceLicenseService {
     final expectedSerial = generateExpectedSerial(
       fingerprint: currentFp,
       phone: cleanPhone,
+      expiryYmd: expiryYmd,
     );
 
     if (cleanSerial != expectedSerial) {
@@ -168,10 +354,15 @@ class DeviceLicenseService {
       'licensed_phone': cleanPhone,
       'licensed_fingerprint': currentFp,
       'licensed_serial': cleanSerial,
+      'licensed_expiry_ymd': expiryYmd,
       'used_serials_json': jsonEncode(usedMap),
     });
 
-    return {'ok': true, 'reason': 'تم تفعيل التطبيق بنجاح على هذا الجهاز.'};
+    final msg = expiryYmd == '00000000'
+        ? 'تم تفعيل التطبيق بنجاح (ترخيص دائم).'
+        : 'تم تفعيل التطبيق بنجاح حتى تاريخ $expiryYmd.';
+
+    return {'ok': true, 'reason': msg};
   }
 }
 
@@ -192,6 +383,7 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
   final TextEditingController _phoneCtrl = TextEditingController();
   final TextEditingController _serialCtrl = TextEditingController();
 
+  CountryCodeItem _selectedCountry = kCountriesList.first;
   String _fingerprint = 'جاري توليد بصمة الجهاز...';
   bool _checkingInitial = true;
   bool _activated = false;
@@ -212,6 +404,12 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
     super.dispose();
   }
 
+  String _composeFullPhone() {
+    final local = _phoneCtrl.text.replaceAll(RegExp(r'[^0-9]'), '').trim();
+    if (local.isEmpty) return '';
+    return '${_selectedCountry.dialCode}$local';
+  }
+
   Future<void> _initStateData() async {
     final fp = await DeviceLicenseService.getOrCreateDeviceFingerprint();
     final isAct = await DeviceLicenseService.isDeviceActivated();
@@ -219,12 +417,110 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
     if (!mounted) return;
     final savedName = (settings['licensed_user_name'] ?? '').trim();
     _nameCtrl.text = DeviceLicenseService.isValidUserName(savedName) ? savedName : '';
-    _phoneCtrl.text = settings['licensed_phone'] ?? '';
+
+    final savedPhone = (settings['licensed_phone'] ?? '').trim();
+    if (savedPhone.isNotEmpty) {
+      CountryCodeItem matched = kCountriesList.first;
+      String rest = savedPhone;
+      for (final c in kCountriesList) {
+        if (savedPhone.startsWith(c.dialCode)) {
+          matched = c;
+          rest = savedPhone.substring(c.dialCode.length);
+          break;
+        }
+      }
+      _selectedCountry = matched;
+      _phoneCtrl.text = rest;
+    }
+
     setState(() {
       _fingerprint = fp;
       _activated = isAct;
       _checkingInitial = false;
     });
+  }
+
+  Future<void> _pickCountryDialog() async {
+    String query = '';
+    final picked = await showModalBottomSheet<CountryCodeItem>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final q = query.trim().toLowerCase();
+          final filtered = kCountriesList.where((c) {
+            if (q.isEmpty) return true;
+            return c.nameAr.toLowerCase().contains(q) ||
+                c.nameEn.toLowerCase().contains(q) ||
+                c.dialCode.contains(q);
+          }).toList();
+
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.72,
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  children: [
+                    const Text(
+                      'اختر الدولة ومفتاح الاتصال',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      autofocus: true,
+                      onChanged: (v) => setSheetState(() => query = v),
+                      decoration: InputDecoration(
+                        hintText: 'ابحث باسم الدولة أو المفتاح (مثال: الصومال أو 252)...',
+                        prefixIcon: const Icon(Icons.search),
+                        filled: true,
+                        fillColor: const Color(0xFFF1F5F9),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (ctx, idx) {
+                          final item = filtered[idx];
+                          return ListTile(
+                            leading: Text(item.flag, style: const TextStyle(fontSize: 24)),
+                            title: Text(item.nameAr, style: const TextStyle(fontWeight: FontWeight.bold)),
+                            subtitle: Text(item.nameEn, style: const TextStyle(fontSize: 12)),
+                            trailing: Text(
+                              item.dialCode,
+                              textDirection: TextDirection.ltr,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF0F2C7E),
+                                fontSize: 15,
+                              ),
+                            ),
+                            onTap: () => Navigator.of(ctx).pop(item),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (picked != null && mounted) {
+      setState(() => _selectedCountry = picked);
+    }
   }
 
   Future<void> _copyFingerprint() async {
@@ -237,18 +533,18 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
 
   Future<void> _sendRequestToDeveloperWhatsapp() async {
     final name = _nameCtrl.text.trim();
-    final phone = DeviceLicenseService.normalizePhone(_phoneCtrl.text);
+    final fullPhone = _composeFullPhone();
 
     if (!DeviceLicenseService.isValidUserName(name)) {
       setState(() {
-        _errorText = 'يرجى كتابة الاسم بالحروف بشكل صحيح بدون أرقام.';
+        _errorText = 'يرجى كتابة الاسم بالحروف فقط (ممنوع النقاط أو الأرقام أو الرموز).';
       });
       return;
     }
 
-    if (phone.length < 6) {
+    if (fullPhone.length < 7) {
       setState(() {
-        _errorText = 'يرجى كتابة رقم الهاتف بشكل صحيح قبل إرسال الطلب للمطور.';
+        _errorText = 'يرجى اختيار الدولة وكتابة رقم الهاتف بشكل صحيح.';
       });
       return;
     }
@@ -258,7 +554,8 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
     final msg = Uri.encodeComponent(
       'طلب تفعيل تطبيق Nebras SofT Pos\n'
       'الاسم: $name\n'
-      'رقم الهاتف: $phone\n'
+      'الدولة: ${_selectedCountry.flag} ${_selectedCountry.nameAr}\n'
+      'رقم الهاتف: $fullPhone\n'
       'بصمة الجهاز: $_fingerprint',
     );
     final url = '${DeviceLicenseService.developerWhatsappUrl}?text=$msg';
@@ -272,7 +569,7 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
     if (!opened) {
       await Clipboard.setData(
         ClipboardData(
-          text: 'الاسم: $name\nرقم الهاتف: $phone\nبصمة الجهاز: $_fingerprint',
+          text: 'الاسم: $name\nالدولة: ${_selectedCountry.nameAr}\nرقم الهاتف: $fullPhone\nبصمة الجهاز: $_fingerprint',
         ),
       );
     }
@@ -298,7 +595,7 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
 
     final res = await DeviceLicenseService.activateDevice(
       userName: _nameCtrl.text,
-      phone: _phoneCtrl.text,
+      phone: _composeFullPhone(),
       serialInput: _serialCtrl.text,
     );
 
@@ -339,6 +636,10 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            const MarqueeBanner(
+              text:
+                  'مرحبا بك عزيزي المستخدم في {{ نظام نبراس - SofT المحاسبي}} ، الرجاء ملأ البيانات المطلوب منك ادخالها ، ومن ثم إرسالها لنا واتساب لنقم بإرسال مفتاح التنشيط لك  ، والإستمتاع بالنظام بكامل الصلاحية',
+            ),
             Card(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(
@@ -355,7 +656,7 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
                       controller: _nameCtrl,
                       keyboardType: TextInputType.name,
                       inputFormatters: [
-                        FilteringTextInputFormatter.deny(RegExp(r'[0-9٠-٩]')),
+                        FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\u0621-\u064A\s]')),
                       ],
                       decoration: const InputDecoration(
                         labelText: 'الاسم الكامل (حروف فقط) *',
@@ -364,17 +665,55 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: _phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'[0-9+]')),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        InkWell(
+                          onTap: _pickCountryDialog,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 56,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF1F5F9),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.black38),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(_selectedCountry.flag, style: const TextStyle(fontSize: 20)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _selectedCountry.dialCode,
+                                  textDirection: TextDirection.ltr,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13.5,
+                                    color: Color(0xFF0F2C7E),
+                                  ),
+                                ),
+                                const Icon(Icons.arrow_drop_down, size: 20),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: _phoneCtrl,
+                            keyboardType: TextInputType.phone,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(RegExp(r'[0-9]')),
+                            ],
+                            decoration: InputDecoration(
+                              labelText: 'رقم الهاتف (${_selectedCountry.nameAr}) *',
+                              prefixIcon: const Icon(Icons.phone_android),
+                              border: const OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
                       ],
-                      decoration: const InputDecoration(
-                        labelText: 'رقم الهاتف *',
-                        prefixIcon: Icon(Icons.phone_android),
-                        border: OutlineInputBorder(),
-                      ),
                     ),
                     const SizedBox(height: 14),
                     const Text(
@@ -480,7 +819,6 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
     );
   }
 }
-
 class ForceUpdateGuardService {
   static const String currentVersion = '1.6.0';
   static const String whatsappBusinessUrl = 'https://wa.me/967735114406';
@@ -1987,7 +2325,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
     );
   }
 }
-
 class ThermalPdfService {
   static String generateUniqueBarcode(int productId) {
     final suffix = DateTime.now().millisecondsSinceEpoch % 1000000;
@@ -5975,7 +6312,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                         keyboardType: TextInputType.phone,
                         decoration: const InputDecoration(
                           labelText: 'رقم الهاتف',
-                          border: const OutlineInputBorder(),
+                          border: OutlineInputBorder(),
                         ),
                       ),
                     ),
@@ -6008,7 +6345,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   controller: addressCtrl,
                   decoration: const InputDecoration(
                     labelText: 'العنوان',
-                    border: const OutlineInputBorder(),
+                    border: OutlineInputBorder(),
                   ),
                 ),
                 if (isCustomer) ...[
