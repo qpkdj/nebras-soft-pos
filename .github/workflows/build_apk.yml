@@ -43,27 +43,34 @@ jobs:
                   txt = txt.replace("gradlePluginPortal()", "gradlePluginPortal()\n        mavenCentral()")
               settings_p.write_text(txt, encoding="utf-8")
 
+          props_p = Path("android/gradle.properties")
+          if props_p.exists():
+              ptxt = props_p.read_text(encoding="utf-8")
+              if "flutter.compileSdkVersion=" not in ptxt:
+                  ptxt += "\nflutter.compileSdkVersion=36\n"
+              props_p.write_text(ptxt, encoding="utf-8")
+
           gradle_p = Path("android/app/build.gradle.kts")
           if gradle_p.exists():
               gtxt = gradle_p.read_text(encoding="utf-8")
-              gtxt = re.sub(r"(compileSdk(?:Version)?)\s*(?:=|\()\s*[^\r\n\)]+\)?", r"\1 = 36", gtxt)
-              gtxt = re.sub(r"(targetSdk(?:Version)?)\s*(?:=|\()\s*[^\r\n\)]+\)?", r"\1 = 36", gtxt)
+              gtxt = re.sub(r"compileSdk\s*=\s*[^\r\n]+", "compileSdk = 36", gtxt)
+              gtxt = re.sub(r"targetSdk\s*=\s*[^\r\n]+", "targetSdk = 36", gtxt)
               gradle_p.write_text(gtxt, encoding="utf-8")
 
           root_gradle_p = Path("android/build.gradle.kts")
           if root_gradle_p.exists():
               rtxt = root_gradle_p.read_text(encoding="utf-8")
-              lib_fix = """
+              fix_block = """
           subprojects {
               plugins.withId("com.android.library") {
-                  extensions.configure<com.android.build.gradle.LibraryExtension> {
+                  configure<com.android.build.api.dsl.LibraryExtension> {
                       compileSdk = 36
                   }
               }
           }
           """
-              if "com.android.library" not in rtxt:
-                  rtxt = rtxt + "\n" + lib_fix
+              if "com.android.api.dsl.LibraryExtension" not in rtxt:
+                  rtxt = rtxt + "\n" + fix_block
                   root_gradle_p.write_text(rtxt, encoding="utf-8")
           '
           flutter pub get
