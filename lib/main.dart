@@ -49,7 +49,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -150,6 +150,17 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
+      CREATE TABLE expenses (
+        id $idType,
+        title $textType,
+        category $textType,
+        amount $doubleType,
+        date $textType,
+        notes $textNullable
+      )
+    ''');
+
+    await db.execute('''
       CREATE TABLE settings (
         id $idType,
         key $textType UNIQUE,
@@ -177,6 +188,18 @@ class DatabaseHelper {
     if (oldVersion < 3) {
       await db.execute('ALTER TABLE products ADD COLUMN wholesale_price REAL NOT NULL DEFAULT 0.0');
       await db.execute('ALTER TABLE products ADD COLUMN special_price REAL NOT NULL DEFAULT 0.0');
+    }
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          category TEXT NOT NULL,
+          amount REAL NOT NULL,
+          date TEXT NOT NULL,
+          notes TEXT
+        )
+      ''');
     }
   }
 
@@ -212,6 +235,29 @@ class DatabaseHelper {
         );
       }
     });
+  }
+
+  Future<int> insertExpense({
+    required String title,
+    required String category,
+    required double amount,
+    DateTime? date,
+    String? notes,
+  }) async {
+    final db = await instance.database;
+    final dt = date ?? DateTime.now();
+    return await db.insert('expenses', {
+      'title': title,
+      'category': category,
+      'amount': amount,
+      'date': dt.toIso8601String(),
+      'notes': notes,
+    });
+  }
+
+  Future<int> deleteExpense(int id) async {
+    final db = await instance.database;
+    return await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<int> insertProduct(DbRow row) async {
@@ -695,53 +741,92 @@ class DatabaseHelper {
     };
   }
 
-  Future<DbRow> getFinancialSummary() async {
+  bool _isWithinRange(String rawDate, DateTime? start, DateTime? end) {
+    if (start == null && end == null) return true;
+    final parsed = DateTime.tryParse(rawDate);
+    if (parsed == null) return false;
+    final d = DateTime(parsed.year, parsed.month, parsed.day);
+    if (start != null) {
+      final s = DateTime(start.year, start.month, start.day);
+      if (d.isBefore(s)) return false;
+    }
+    if (end != null) {
+      final e = DateTime(end.year, end.month, end.day);
+      if (d.isAfter(e)) return false;
+    }
+    return true;
+  }
+
+  Future getFinancialSummary({DateTime? startDate, DateTime? endDate}) async {
     final db = await instance.database;
 
-    final salesRows = await db.rawQuery(
-      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'sale'",
-    );
-    final saleReturnsRows = await db.rawQuery(
-      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'sale_return'",
-    );
-    final purchasesRows = await db.rawQuery(
-      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'purchase'",
-    );
-    final purchaseReturnsRows = await db.rawQuery(
-      "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE type = 'purchase_return'",
-    );
-    final cogsRows = await db.rawQuery('''
-      SELECT COALESCE(SUM(ii.quantity * p.purchase_price), 0) AS cost
-      FROM invoice_items ii
-      INNER JOIN invoices inv ON inv.id = ii.invoice_id
-      LEFT JOIN products p ON p.id = ii.product_id
-      WHERE inv.type = 'sale'
-    ''');
-    final recentInvoices = await db.query(
-      'invoices',
-      orderBy: 'id DESC',
-      limit: 25,
-    );
+    final allInvoices = await db.query('invoices', orderBy: 'id DESC');
+    final allExpenses = await db.query('expenses', orderBy: 'id DESC');
     final lowStockProducts = await db.rawQuery(
       'SELECT * FROM products WHERE is_active = 1 AND stock_quantity <= min_stock ORDER BY stock_quantity ASC',
     );
 
-    final rawSales = (salesRows.first['total'] as num?)?.toDouble() ?? 0.0;
-    final saleReturns = (saleReturnsRows.first['total'] as num?)?.toDouble() ?? 0.0;
-    final rawPurchases = (purchasesRows.first['total'] as num?)?.toDouble() ?? 0.0;
-    final purchaseReturns = (purchaseReturnsRows.first['total'] as num?)?.toDouble() ?? 0.0;
-    final totalCogs = (cogsRows.first['cost'] as num?)?.toDouble() ?? 0.0;
+    final filteredInvoices = allInvoices.where((inv) {
+      return _isWithinRange((inv['date'] ?? '').toString(), startDate, endDate);
+    }).toList();
+
+    final filteredExpenses = allExpenses.where((exp) {
+      return _isWithinRange((exp['date'] ?? '').toString(), startDate, endDate);
+    }).toList();
+
+    double rawSales = 0.0;
+    double saleReturns = 0.0;
+    double rawPurchases = 0.0;
+    double purchaseReturns = 0.0;
+    final List<int> saleInvoiceIds = [];
+
+    for (final inv in filteredInvoices) {
+      final t = (inv['type'] ?? '').toString();
+      final amt = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
+      if (t == 'sale') {
+        rawSales += amt;
+        final id = inv['id'] as int?;
+        if (id != null) saleInvoiceIds.add(id);
+      } else if (t == 'sale_return') {
+        saleReturns += amt;
+      } else if (t == 'purchase') {
+        rawPurchases += amt;
+      } else if (t == 'purchase_return') {
+        purchaseReturns += amt;
+      }
+    }
+
+    double totalCogs = 0.0;
+    if (saleInvoiceIds.isNotEmpty) {
+      final placeholders = List.filled(saleInvoiceIds.length, '?').join(',');
+      final cogsRows = await db.rawQuery('''
+        SELECT COALESCE(SUM(ii.quantity * p.purchase_price), 0) AS cost
+        FROM invoice_items ii
+        LEFT JOIN products p ON p.id = ii.product_id
+        WHERE ii.invoice_id IN ($placeholders)
+      ''', saleInvoiceIds);
+      totalCogs = (cogsRows.first['cost'] as num?)?.toDouble() ?? 0.0;
+    }
+
+    double totalExpenses = 0.0;
+    for (final exp in filteredExpenses) {
+      totalExpenses += (exp['amount'] as num?)?.toDouble() ?? 0.0;
+    }
 
     final netSales = (rawSales - saleReturns) < 0 ? 0.0 : (rawSales - saleReturns);
     final netPurchases = (rawPurchases - purchaseReturns) < 0 ? 0.0 : (rawPurchases - purchaseReturns);
     final grossProfit = netSales - totalCogs;
+    final realNetProfit = grossProfit - totalExpenses;
 
     return {
       'totalSales': netSales,
       'totalPurchases': netPurchases,
       'totalCogs': totalCogs,
+      'totalExpenses': totalExpenses,
       'grossProfit': grossProfit,
-      'recentInvoices': recentInvoices,
+      'realNetProfit': realNetProfit,
+      'recentInvoices': filteredInvoices.take(25).toList(),
+      'expenses': filteredExpenses.take(25).toList(),
       'lowStockProducts': lowStockProducts,
     };
   }
@@ -1529,7 +1614,7 @@ class ThermalPdfService {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('تم حفظ المرتجع رقم $retNum وتحديث المخزون والرصيد')),
                           );
-                          await showInvoiceActionSheet(context, retNum);
+                          await showInvoiceActionSheet(context, retNum, onReturnSaved: onReturnSaved);
                         } catch (_) {
                           if (ctx.mounted) {
                             setDialogState(() => submitting = false);
@@ -2033,27 +2118,181 @@ class ReportsScreen extends StatefulWidget {
 
 class _ReportsScreenState extends State<ReportsScreen> {
   bool _loading = true;
+  String _periodMode = 'all';
+  DateTime? _startDate;
+  DateTime? _endDate;
+
   double _totalSales = 0.0;
   double _totalPurchases = 0.0;
-  double _grossProfit = 0.0;
+  double _totalExpenses = 0.0;
+  double _realNetProfit = 0.0;
   List<DbRow> _recentInvoices = [];
+  List<DbRow> _expenses = [];
   List<DbRow> _lowStock = [];
 
   @override
   void initState() {
     super.initState();
+    _applyPeriod('all');
+  }
+
+  void _applyPeriod(String mode) {
+    final now = DateTime.now();
+    DateTime? s;
+    DateTime? e;
+
+    if (mode == 'today') {
+      s = DateTime(now.year, now.month, now.day);
+      e = DateTime(now.year, now.month, now.day);
+    } else if (mode == 'month') {
+      s = DateTime(now.year, now.month, 1);
+      e = DateTime(now.year, now.month, now.day);
+    } else if (mode == 'custom') {
+      s = _startDate ?? DateTime(now.year, now.month, 1);
+      e = _endDate ?? DateTime(now.year, now.month, now.day);
+    }
+
+    setState(() {
+      _periodMode = mode;
+      _startDate = s;
+      _endDate = e;
+    });
     _loadReport();
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 2),
+      initialDateRange: DateTimeRange(
+        start: _startDate ?? DateTime(now.year, now.month, 1),
+        end: _endDate ?? DateTime(now.year, now.month, now.day),
+      ),
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _periodMode = 'custom';
+        _startDate = picked.start;
+        _endDate = picked.end;
+      });
+      await _loadReport();
+    }
+  }
+
+  Future<void> _openAddExpenseDialog() async {
+    final titleCtrl = TextEditingController();
+    final amountCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+    String category = 'إيجار ومصاريف ثابتة';
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text(
+            'تسجيل مصروف تشغيلي',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'بيان المصروف *',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: category,
+                  decoration: const InputDecoration(
+                    labelText: 'تصنيف المصروف',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'إيجار ومصاريف ثابتة', child: Text('إيجار ومصاريف ثابتة')),
+                    DropdownMenuItem(value: 'كهرباء ونت', child: Text('كهرباء ونت')),
+                    DropdownMenuItem(value: 'رواتب وأجور', child: Text('رواتب وأجور')),
+                    DropdownMenuItem(value: 'نقل ومواصلات', child: Text('نقل ومواصلات')),
+                    DropdownMenuItem(value: 'مصروفات متنوعة', child: Text('مصروفات متنوعة')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setDialogState(() => category = v);
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'المبلغ *',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: notesCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'ملاحظات (اختياري)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+              onPressed: () async {
+                final title = titleCtrl.text.trim();
+                final amt = double.tryParse(amountCtrl.text.trim()) ?? 0.0;
+                if (title.isEmpty || amt <= 0) return;
+                await DatabaseHelper.instance.insertExpense(
+                  title: title,
+                  category: category,
+                  amount: amt,
+                  notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop(true);
+              },
+              child: const Text('حفظ المصروف'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await _loadReport();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تسجيل المصروف وتحديث صافي الربح الحقيقي')),
+      );
+    }
   }
 
   Future<void> _loadReport() async {
     setState(() => _loading = true);
-    final summary = await DatabaseHelper.instance.getFinancialSummary();
+    final summary = await DatabaseHelper.instance.getFinancialSummary(
+      startDate: _startDate,
+      endDate: _endDate,
+    ) as DbRow;
     if (!mounted) return;
     setState(() {
       _totalSales = (summary['totalSales'] as num?)?.toDouble() ?? 0.0;
       _totalPurchases = (summary['totalPurchases'] as num?)?.toDouble() ?? 0.0;
-      _grossProfit = (summary['grossProfit'] as num?)?.toDouble() ?? 0.0;
+      _totalExpenses = (summary['totalExpenses'] as num?)?.toDouble() ?? 0.0;
+      _realNetProfit = (summary['realNetProfit'] as num?)?.toDouble() ?? 0.0;
       _recentInvoices = (summary['recentInvoices'] as List<DbRow>?) ?? [];
+      _expenses = (summary['expenses'] as List<DbRow>?) ?? [];
       _lowStock = (summary['lowStockProducts'] as List<DbRow>?) ?? [];
       _loading = false;
     });
@@ -2082,14 +2321,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(color: Colors.black54, fontSize: 13)),
+            Text(title, style: const TextStyle(color: Colors.black54, fontSize: 12.5)),
             const SizedBox(height: 6),
             Text(
               value.toStringAsFixed(2),
               style: TextStyle(
                 color: color,
                 fontWeight: FontWeight.bold,
-                fontSize: 18,
+                fontSize: 17.5,
               ),
             ),
           ],
@@ -2100,6 +2339,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final rangeHint = _periodMode == 'custom' && _startDate != null && _endDate != null
+        ? 'من ${_startDate!.toString().split(' ').first} إلى ${_endDate!.toString().split(' ').first}'
+        : _periodMode == 'today'
+            ? 'فترة اليوم'
+            : _periodMode == 'month'
+                ? 'فترة الشهر الحالي'
+                : 'جميع الفترات';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -2110,100 +2357,206 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
+            tooltip: 'إضافة مصروف تشغيلي',
+            onPressed: _openAddExpenseDialog,
+            icon: const Icon(Icons.add_card),
+          ),
+          IconButton(
+            tooltip: 'تحديث التقرير',
             onPressed: _loadReport,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadReport,
-              child: ListView(
-                padding: const EdgeInsets.all(12),
-                children: [
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: 1.55,
-                    children: [
-                      _buildStatCard('صافي المبيعات', _totalSales, const Color(0xFF1545B5)),
-                      _buildStatCard('صافي المشتريات', _totalPurchases, const Color(0xFFD97706)),
-                      _buildStatCard(
-                        'صافي الربح التقديري',
-                        _grossProfit,
-                        _grossProfit >= 0 ? const Color(0xFF0D7C66) : Colors.red,
-                      ),
-                      _buildStatCard('أصناف النواقص', _lowStock.length.toDouble(), Colors.redAccent),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'آخر الفواتير والمرتجعات (اضغط للطباعة أو المرتجع)',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_recentInvoices.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text('لا توجد فواتير مسجلة حتى الآن'),
-                      ),
-                    )
-                  else
-                    ..._recentInvoices.map((inv) {
-                      final invType = (inv['type'] ?? '').toString();
-                      final isReturn = invType.endsWith('_return');
-                      final isSaleSide = invType.startsWith('sale');
-                      final method = inv['payment_method']?.toString() ?? '';
-                      final invNum = (inv['invoice_number'] ?? '').toString();
-
-                      final Color badgeColor = isReturn
-                          ? const Color(0xFFDC2626)
-                          : (isSaleSide ? const Color(0xFF1545B5) : const Color(0xFFD97706));
-
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        child: ListTile(
-                          onTap: () => ThermalPdfService.showInvoiceActionSheet(
-                            context,
-                            invNum,
-                            onReturnSaved: _loadReport,
-                          ),
-                          leading: CircleAvatar(
-                            backgroundColor: badgeColor.withAlpha(25),
-                            child: Icon(
-                              isReturn
-                                  ? Icons.assignment_return
-                                  : (isSaleSide ? Icons.arrow_upward : Icons.arrow_downward),
-                              color: badgeColor,
-                            ),
-                          ),
-                          title: Text(
-                            '$invNum (${_typeBadgeLabel(invType)})',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Text('الدفع: $method • ${inv['date'].toString().split('T').first}'),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '${((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                              ),
-                              const SizedBox(width: 4),
-                              const Icon(Icons.more_vert, size: 20, color: Colors.black54),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                ],
-              ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openAddExpenseDialog,
+        backgroundColor: const Color(0xFFDC2626),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.remove_circle_outline),
+        label: const Text('تسجيل مصروف'),
+      ),
+      body: Column(
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: Row(
+              children: [
+                ChoiceChip(
+                  label: const Text('الكل'),
+                  selected: _periodMode == 'all',
+                  onSelected: (_) => _applyPeriod('all'),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('اليوم'),
+                  selected: _periodMode == 'today',
+                  onSelected: (_) => _applyPeriod('today'),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('هذا الشهر'),
+                  selected: _periodMode == 'month',
+                  onSelected: (_) => _applyPeriod('month'),
+                ),
+                const SizedBox(width: 8),
+                ActionChip(
+                  avatar: const Icon(Icons.date_range, size: 18),
+                  label: Text(_periodMode == 'custom' ? rangeHint : 'فترة مخصصة'),
+                  onPressed: _pickCustomRange,
+                ),
+              ],
             ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _loadReport,
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 84),
+                      children: [
+                        Text(
+                          'الفترة المعروضة: $rangeHint • النواقص: ${_lowStock.length}',
+                          style: const TextStyle(color: Colors.black54, fontSize: 12.5),
+                        ),
+                        const SizedBox(height: 8),
+                        GridView.count(
+                          crossAxisCount: 2,
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisSpacing: 10,
+                          mainAxisSpacing: 10,
+                          childAspectRatio: 1.55,
+                          children: [
+                            _buildStatCard('صافي المبيعات', _totalSales, const Color(0xFF1545B5)),
+                            _buildStatCard('صافي المشتريات', _totalPurchases, const Color(0xFFD97706)),
+                            _buildStatCard('المصروفات التشغيلية', _totalExpenses, const Color(0xFFDC2626)),
+                            _buildStatCard(
+                              'صافي الربح الحقيقي',
+                              _realNetProfit,
+                              _realNetProfit >= 0 ? const Color(0xFF0D7C66) : Colors.red,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        const Text(
+                          'المصروفات المسجلة في الفترة',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                        const SizedBox(height: 8),
+                        if (_expenses.isEmpty)
+                          const Card(
+                            child: Padding(
+                              padding: EdgeInsets.all(14),
+                              child: Text('لا توجد مصروفات مسجلة في هذه الفترة'),
+                            ),
+                          )
+                        else
+                          ..._expenses.map((exp) {
+                            final int expId = exp['id'] as int;
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                dense: true,
+                                leading: const CircleAvatar(
+                                  backgroundColor: Color(0x22DC2626),
+                                  child: Icon(Icons.receipt, color: Color(0xFFDC2626)),
+                                ),
+                                title: Text(
+                                  '${exp['title']} (${exp['category'] ?? ''})',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                subtitle: Text((exp['date'] ?? '').toString().split('T').first),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      ((exp['amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFFDC2626),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline, size: 20, color: Colors.black54),
+                                      onPressed: () async {
+                                        await DatabaseHelper.instance.deleteExpense(expId);
+                                        await _loadReport();
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'الفواتير والمرتجعات في الفترة (اضغط للطباعة أو المرتجع)',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                        const SizedBox(height: 8),
+                        if (_recentInvoices.isEmpty)
+                          const Card(
+                            child: Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Text('لا توجد فواتير مسجلة في هذه الفترة'),
+                            ),
+                          )
+                        else
+                          ..._recentInvoices.map((inv) {
+                            final invType = (inv['type'] ?? '').toString();
+                            final isReturn = invType.endsWith('_return');
+                            final isSaleSide = invType.startsWith('sale');
+                            final method = inv['payment_method']?.toString() ?? '';
+                            final invNum = (inv['invoice_number'] ?? '').toString();
+
+                            final Color badgeColor = isReturn
+                                ? const Color(0xFFDC2626)
+                                : (isSaleSide ? const Color(0xFF1545B5) : const Color(0xFFD97706));
+
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                onTap: () => ThermalPdfService.showInvoiceActionSheet(
+                                  context,
+                                  invNum,
+                                  onReturnSaved: _loadReport,
+                                ),
+                                leading: CircleAvatar(
+                                  backgroundColor: badgeColor.withAlpha(25),
+                                  child: Icon(
+                                    isReturn
+                                        ? Icons.assignment_return
+                                        : (isSaleSide ? Icons.arrow_upward : Icons.arrow_downward),
+                                    color: badgeColor,
+                                  ),
+                                ),
+                                title: Text(
+                                  '$invNum (${_typeBadgeLabel(invType)})',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                subtitle: Text('الدفع: $method • ${inv['date'].toString().split('T').first}'),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '${((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2)}',
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Icon(Icons.more_vert, size: 20, color: Colors.black54),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
