@@ -33,13 +33,22 @@ jobs:
           sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA"/>\n    <application|' android/app/src/main/AndroidManifest.xml
           python3 -c '
           from pathlib import Path
-          p = Path("android/settings.gradle.kts")
-          if p.exists():
-              txt = p.read_text(encoding="utf-8")
+          import re
+
+          settings_p = Path("android/settings.gradle.kts")
+          if settings_p.exists():
+              txt = settings_p.read_text(encoding="utf-8")
               txt = txt.replace("id(\"org.jetbrains.kotlin.android\") version \"2.3.20\"", "id(\"org.jetbrains.kotlin.android\") version \"2.1.0\"")
               if "mavenCentral()" not in txt:
                   txt = txt.replace("gradlePluginPortal()", "gradlePluginPortal()\n        mavenCentral()")
-              p.write_text(txt, encoding="utf-8")
+              settings_p.write_text(txt, encoding="utf-8")
+
+          gradle_p = Path("android/app/build.gradle.kts")
+          if gradle_p.exists():
+              gtxt = gradle_p.read_text(encoding="utf-8")
+              gtxt = re.sub(r"compileSdk\s*=\s*\S+", "compileSdk = 36", gtxt)
+              gtxt = re.sub(r"targetSdk\s*=\s*\S+", "targetSdk = 36", gtxt)
+              gradle_p.write_text(gtxt, encoding="utf-8")
           '
           flutter pub get
           if [ -f "assets/icon/app_icon.png" ] && (grep -q "^flutter_launcher_icons:" pubspec.yaml || [ -f "flutter_launcher_icons.yaml" ]); then
