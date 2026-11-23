@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
@@ -17,6 +18,56 @@ typedef DbRow = Map<String, dynamic>;
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NebrasPosApp());
+}
+
+class CsvExportService {
+  static String _escapeCsv(dynamic value) {
+    final raw = (value ?? '').toString().replaceAll('"', '""');
+    return '"$raw"';
+  }
+
+  static Uint8List _buildUtf8BomCsvBytes(List<List<dynamic>> rows) {
+    final buffer = StringBuffer();
+    for (final row in rows) {
+      buffer.writeln(row.map(_escapeCsv).join(','));
+    }
+    final utf8Body = utf8.encode(buffer.toString());
+    final out = Uint8List(3 + utf8Body.length);
+    out[0] = 0xEF;
+    out[1] = 0xBB;
+    out[2] = 0xBF;
+    out.setRange(3, out.length, utf8Body);
+    return out;
+  }
+
+  static Future<void> exportAndShareCsv({
+    required BuildContext context,
+    required String fileBaseName,
+    required List<List<dynamic>> rows,
+  }) async {
+    final bytes = _buildUtf8BomCsvBytes(rows);
+    final stamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
+    final fileName = '${fileBaseName}_$stamp.csv';
+
+    try {
+      final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
+      final exportDir = Directory(p.join(p.dirname(dbPath), 'nebras_exports'));
+      if (!await exportDir.exists()) {
+        await exportDir.create(recursive: true);
+      }
+      final savedFile = File(p.join(exportDir.path, fileName));
+      await savedFile.writeAsBytes(bytes, flush: true);
+    } catch (_) {}
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('تم تجهيز ملف CSV: $fileName')),
+    );
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: fileName,
+    );
+  }
 }
 
 class DatabaseHelper {
@@ -2181,6 +2232,43 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _exportInvoicesCsv() async {
+    final rows = <List<dynamic>>[
+      ['رقم المستند', 'النوع', 'التاريخ', 'الإجمالي الصافي', 'الخصم', 'طريقة الدفع'],
+      ..._recentInvoices.map((inv) => [
+            inv['invoice_number'] ?? '',
+            _typeBadgeLabel((inv['type'] ?? '').toString()),
+            (inv['date'] ?? '').toString().replaceFirst('T', ' ').split('.').first,
+            ((inv['total_amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            ((inv['discount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            inv['payment_method'] ?? '',
+          ]),
+    ];
+    await CsvExportService.exportAndShareCsv(
+      context: context,
+      fileBaseName: 'nebras_invoices',
+      rows: rows,
+    );
+  }
+
+  Future<void> _exportExpensesCsv() async {
+    final rows = <List<dynamic>>[
+      ['البيان', 'التصنيف', 'المبلغ', 'التاريخ', 'ملاحظات'],
+      ..._expenses.map((exp) => [
+            exp['title'] ?? '',
+            exp['category'] ?? '',
+            ((exp['amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            (exp['date'] ?? '').toString().split('T').first,
+            exp['notes'] ?? '',
+          ]),
+    ];
+    await CsvExportService.exportAndShareCsv(
+      context: context,
+      fileBaseName: 'nebras_expenses',
+      rows: rows,
+    );
+  }
+
   Future<void> _openAddExpenseDialog() async {
     final titleCtrl = TextEditingController();
     final amountCtrl = TextEditingController();
@@ -2357,6 +2445,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
+            tooltip: 'تصدير الفواتير CSV',
+            onPressed: _exportInvoicesCsv,
+            icon: const Icon(Icons.table_view),
+          ),
+          IconButton(
             tooltip: 'إضافة مصروف تشغيلي',
             onPressed: _openAddExpenseDialog,
             icon: const Icon(Icons.add_card),
@@ -2440,11 +2533,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           ],
                         ),
                         const SizedBox(height: 14),
-                        const Text(
-                          'المصروفات المسجلة في الفترة',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'المصروفات المسجلة في الفترة',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                            ),
+                            TextButton.icon(
+                              onPressed: _expenses.isEmpty ? null : _exportExpensesCsv,
+                              icon: const Icon(Icons.download, size: 18),
+                              label: const Text('تصدير CSV'),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 4),
                         if (_expenses.isEmpty)
                           const Card(
                             child: Padding(
@@ -2491,11 +2594,23 @@ class _ReportsScreenState extends State<ReportsScreen> {
                             );
                           }),
                         const SizedBox(height: 12),
-                        const Text(
-                          'الفواتير والمرتجعات في الفترة (اضغط للطباعة أو المرتجع)',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'الفواتير والمرتجعات في الفترة',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _recentInvoices.isEmpty ? null : _exportInvoicesCsv,
+                              icon: const Icon(Icons.download, size: 18),
+                              label: const Text('تصدير CSV'),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 4),
                         if (_recentInvoices.isEmpty)
                           const Card(
                             child: Padding(
@@ -4394,6 +4509,39 @@ class _ProductsScreenState extends State<ProductsScreen> {
     });
   }
 
+  Future<void> _exportProductsCsv() async {
+    final rows = <List<dynamic>>[
+      [
+        'المعرف',
+        'الباركود',
+        'اسم الصنف',
+        'سعر الشراء',
+        'سعر التجزئة',
+        'سعر الجملة',
+        'السعر الخاص',
+        'الكمية',
+        'الحد الأدنى',
+      ],
+      ..._allProducts.map((pRow) => [
+            pRow['id'] ?? '',
+            pRow['barcode'] ?? '',
+            pRow['name'] ?? '',
+            ((pRow['purchase_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            ((pRow['sale_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            ((pRow['wholesale_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            ((pRow['special_price'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
+            (pRow['stock_quantity'] ?? 0).toString(),
+            (pRow['min_stock'] ?? 0).toString(),
+          ]),
+    ];
+
+    await CsvExportService.exportAndShareCsv(
+      context: context,
+      fileBaseName: 'nebras_products',
+      rows: rows,
+    );
+  }
+
   List<DbRow> get _filteredProducts {
     final q = _searchQuery.trim().toLowerCase();
     if (q.isEmpty) return _allProducts;
@@ -4659,6 +4807,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
         ),
         backgroundColor: const Color(0xFF0D7C66),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            tooltip: 'تصدير الأصناف CSV',
+            onPressed: _allProducts.isEmpty ? null : _exportProductsCsv,
+            icon: const Icon(Icons.table_view),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openProductDialog(),
