@@ -39,6 +39,7 @@ class ForceUpdateGuardService {
   }
 
   static Future> evaluateUpdateStatus(
+    static Future> evaluateUpdateStatus(
     Map<String, String> settings,
   ) async {
     final bool isOnline = await hasInternetConnection();
@@ -102,6 +103,7 @@ class ForceUpdateGuardService {
       'updateUrl': resolvedUrl,
     };
   }
+
 
   static bool _isVersionNewer(String latest, String current) {
     final lParts = latest
