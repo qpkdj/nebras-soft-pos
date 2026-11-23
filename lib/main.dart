@@ -24,6 +24,113 @@ void main() {
   runApp(const NebrasPosApp());
 }
 
+class ForceUpdateGuardService {
+  static const String currentVersion = '1.6.0';
+  static const String whatsappBusinessUrl = 'https://wa.me/967735114406';
+
+  static Future<bool> hasInternetConnection() async {
+    try {
+      final result = await InternetAddress.lookup('example.com')
+          .timeout(const Duration(seconds: 4));
+      return result.isNotEmpty && result.first.rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future> evaluateUpdateStatus(
+    Map<String, String> settings,
+  ) async {
+    final bool isOnline = await hasInternetConnection();
+    if (!isOnline) {
+      return {
+        'online': false,
+        'required': false,
+        'title': '',
+        'message': '',
+        'updateUrl': '',
+      };
+    }
+
+    final String flag = (settings['force_update_enabled'] ?? '0').trim();
+    final String latestVer = (settings['latest_version'] ?? currentVersion).trim();
+    final String customMsg = (settings['force_update_message'] ?? '').trim();
+    final String updateUrl = (settings['update_download_url'] ?? '').trim();
+    final String feedUrl = (settings['update_feed_url'] ?? '').trim();
+
+    bool required = flag == '1' || flag.toLowerCase() == 'true';
+    String title = 'تحديث إجباري مطلوب';
+    String message = customMsg.isNotEmpty
+        ? customMsg
+        : 'يتوفر إصدار أحدث من Nebras SofT Pos ($latestVer). يرجى التحديث للمتابعة أو التواصل مع المطور نبراس.';
+    String resolvedUrl = updateUrl;
+
+    if (feedUrl.isNotEmpty) {
+      try {
+        final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+        final req = await client.getUrl(Uri.parse(feedUrl));
+        final res = await req.close().timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final body = await res.transform(utf8.decoder).join();
+          final decoded = jsonDecode(body);
+          if (decoded is Map<String, dynamic>) {
+            final bool remoteForce = decoded['force_update'] == true ||
+                decoded['force_update']?.toString() == '1';
+            final String remoteVer = (decoded['latest_version'] ?? latestVer).toString().trim();
+            final String remoteMsg = (decoded['message'] ?? '').toString().trim();
+            final String remoteUrl = (decoded['download_url'] ?? resolvedUrl).toString().trim();
+            if (remoteForce || _isVersionNewer(remoteVer, currentVersion)) {
+              required = true;
+              if (remoteMsg.isNotEmpty) message = remoteMsg;
+              if (remoteUrl.isNotEmpty) resolvedUrl = remoteUrl;
+            }
+          }
+        }
+        client.close(force: true);
+      } catch (_) {}
+    }
+
+    if (!required && _isVersionNewer(latestVer, currentVersion)) {
+      required = true;
+    }
+
+    return {
+      'online': true,
+      'required': required,
+      'title': title,
+      'message': message,
+      'updateUrl': resolvedUrl,
+    };
+  }
+
+  static bool _isVersionNewer(String latest, String current) {
+    final lParts = latest
+        .split('.')
+        .map((e) => int.tryParse(e.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+    final cParts = current
+        .split('.')
+        .map((e) => int.tryParse(e.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+    final maxLen = lParts.length > cParts.length ? lParts.length : cParts.length;
+    for (int i = 0; i < maxLen; i++) {
+      final lVal = i < lParts.length ? lParts[i] : 0;
+      final cVal = i < cParts.length ? cParts[i] : 0;
+      if (lVal > cVal) return true;
+      if (lVal < cVal) return false;
+    }
+    return false;
+  }
+
+  static Future<void> exitAppCompletely() async {
+    try {
+      await SystemNavigator.pop();
+    } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 200));
+    exit(0);
+  }
+}
+
 class AppPermissionsService {
   static Future<void> requestStartupPermissions() async {
     try {
@@ -287,6 +394,11 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'admin_pin', 'value': ''});
     await db.insert('settings', {'key': 'receipt_footer', 'value': 'شكراً لتعاملكم معنا • Nebras SofT Pos'});
     await db.insert('settings', {'key': 'device_id', 'value': generatedDeviceId});
+    await db.insert('settings', {'key': 'force_update_enabled', 'value': '0'});
+    await db.insert('settings', {'key': 'latest_version', 'value': ForceUpdateGuardService.currentVersion});
+    await db.insert('settings', {'key': 'force_update_message', 'value': ''});
+    await db.insert('settings', {'key': 'update_download_url', 'value': ''});
+    await db.insert('settings', {'key': 'update_feed_url', 'value': ''});
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -375,6 +487,11 @@ class DatabaseHelper {
       'admin_pin': '',
       'receipt_footer': 'شكراً لتعاملكم معنا • Nebras SofT Pos',
       'device_id': '',
+      'force_update_enabled': '0',
+      'latest_version': ForceUpdateGuardService.currentVersion,
+      'force_update_message': '',
+      'update_download_url': '',
+      'update_feed_url': '',
     };
     for (final r in rows) {
       final k = r['key']?.toString();
@@ -2533,7 +2650,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   static const String _appVersion = 'v1.6.0';
-  static const String _whatsappUrl = 'https://wa.me/967735114406';
+  static const String _whatsappUrl = ForceUpdateGuardService.whatsappBusinessUrl;
   static const String _telegramUrl = 'https://t.me/softnebras';
   static const String _youtubeUrl = 'https://youtube.com/@nebras-soft?si=KALKhHKx4ya-97xJ';
   static const String _githubUrl = 'https://github.com/qpkdj';
@@ -2547,6 +2664,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _receiptFooter = 'شكراً لتعاملكم معنا • Nebras SofT Pos';
   String _deviceId = '';
   bool _dbReady = false;
+  bool _updateCheckDone = false;
 
   static const List<_ModuleItem> _modules = [
     _ModuleItem('نقطة البيع (POS)', Icons.point_of_sale, Color(0xFF1545B5)),
@@ -2581,12 +2699,128 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _deviceId = settings['device_id'] ?? '';
         _dbReady = true;
       });
+
+      if (!_updateCheckDone) {
+        _updateCheckDone = true;
+        await _runStartupUpdateGuard(settings);
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _dbReady = true;
       });
     }
+  }
+
+  Future<void> _runStartupUpdateGuard(Map<String, String> settings) async {
+    final status = await ForceUpdateGuardService.evaluateUpdateStatus(settings);
+    if (!mounted) return;
+    final bool isOnline = status['online'] == true;
+    final bool isRequired = status['required'] == true;
+    if (!isOnline || !isRequired) {
+      return;
+    }
+
+    final String title = (status['title'] ?? 'تحديث إجباري مطلوب').toString();
+    final String message = (status['message'] ?? '').toString();
+    final String updateUrl = (status['updateUrl'] ?? '').toString();
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) async {
+          if (!didPop) {
+            await ForceUpdateGuardService.exitAppCompletely();
+          }
+        },
+        child: AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.system_update_alt, color: Color(0xFFDC2626)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  message,
+                  style: const TextStyle(fontSize: 13.5, height: 1.5),
+                ),
+                const SizedBox(height: 14),
+                Card(
+                  color: const Color(0xFFF0FDF4),
+                  child: ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: Color(0x2216A34A),
+                      child: Icon(Icons.business_center, color: Color(0xFF16A34A)),
+                    ),
+                    title: const Text(
+                      'مراسلة المطور نبراس واتساب أعمال',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    trailing: const Icon(Icons.chat_bubble_outline, color: Color(0xFF16A34A)),
+                    onTap: () async {
+                      final uri = Uri.parse(_whatsappUrl);
+                      bool opened = false;
+                      try {
+                        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      } catch (_) {
+                        opened = false;
+                      }
+                      if (!opened) {
+                        await Clipboard.setData(const ClipboardData(text: _whatsappUrl));
+                      }
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            opened
+                                ? 'جاري فتح واتساب أعمال للمطور نبراس...'
+                                : 'تعذر فتح واتساب مباشرة، تم نسخ رابط المراسلة',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: () => ForceUpdateGuardService.exitAppCompletely(),
+              icon: const Icon(Icons.exit_to_app, color: Color(0xFFDC2626)),
+              label: const Text(
+                'خروج وإيقاف التطبيق',
+                style: TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.bold),
+              ),
+            ),
+            if (updateUrl.isNotEmpty)
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1545B5)),
+                onPressed: () async {
+                  try {
+                    await launchUrl(Uri.parse(updateUrl), mode: LaunchMode.externalApplication);
+                  } catch (_) {}
+                },
+                icon: const Icon(Icons.download),
+                label: const Text('تحديث الآن'),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<bool> _verifyPinIfRequired(String sectionTitle) async {
