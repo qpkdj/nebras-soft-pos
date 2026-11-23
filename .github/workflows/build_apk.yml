@@ -49,23 +49,6 @@ jobs:
               gtxt = re.sub(r"compileSdk\s*=\s*[^\r\n]+", "compileSdk = 36", gtxt)
               gtxt = re.sub(r"targetSdk\s*=\s*[^\r\n]+", "targetSdk = 36", gtxt)
               gradle_p.write_text(gtxt, encoding="utf-8")
-
-          root_gradle_p = Path("android/build.gradle.kts")
-          if root_gradle_p.exists():
-              rtxt = root_gradle_p.read_text(encoding="utf-8")
-              hook = """
-          subprojects {
-              afterEvaluate {
-                  val ext = extensions.findByType(com.android.build.gradle.BaseExtension::class.java)
-                  if (ext != null) {
-                      ext.compileSdkVersion(36)
-                  }
-              }
-          }
-          """
-              if "ext.compileSdkVersion(36)" not in rtxt:
-                  rtxt = rtxt + "\n" + hook
-                  root_gradle_p.write_text(rtxt, encoding="utf-8")
           '
           flutter pub get
           if [ -f "assets/icon/app_icon.png" ] && (grep -q "^flutter_launcher_icons:" pubspec.yaml || [ -f "flutter_launcher_icons.yaml" ]); then
