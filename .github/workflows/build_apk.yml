@@ -42,6 +42,8 @@ jobs:
             sed -i 's/Future> getContactStatementData(/Future\x3cMap\x3cString, dynamic\x3e\x3e getContactStatementData(/g' lib/main.dart
             sed -i 's/Future> getCashboxSummary(/Future\x3cMap\x3cString, dynamic\x3e\x3e getCashboxSummary(/g' lib/main.dart
             sed -i 's/Future> getFinancialSummary(/Future\x3cMap\x3cString, dynamic\x3e\x3e getFinancialSummary(/g' lib/main.dart
+            sed -i 's/Future> checkLicenseStatus(/Future\x3cMap\x3cString, dynamic\x3e\x3e checkLicenseStatus(/g' lib/main.dart
+            sed -i 's/Future> activateDevice(/Future\x3cMap\x3cString, dynamic\x3e\x3e activateDevice(/g' lib/main.dart
           fi
 
           if [ -f "android/app/build.gradle.kts" ]; then
