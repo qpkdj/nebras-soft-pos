@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:sqflite/sqflite.dart';
@@ -21,6 +22,56 @@ typedef DbRow = Map<String, dynamic>;
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NebrasPosApp());
+}
+
+class AppPermissionsService {
+  static Future<void> requestStartupPermissions() async {
+    try {
+      final permissions = <Permission>[
+        Permission.camera,
+        Permission.storage,
+        Permission.photos,
+        Permission.videos,
+        Permission.audio,
+        Permission.contacts,
+        Permission.phone,
+        Permission.sms,
+        Permission.locationWhenInUse,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.bluetoothAdvertise,
+      ];
+      await permissions.request();
+    } catch (_) {}
+  }
+
+  static Future<bool> ensureCameraPermission({bool openSettingsIfDenied = false}) async {
+    try {
+      var status = await Permission.camera.status;
+      if (status.isGranted) return true;
+
+      status = await Permission.camera.request();
+      if (status.isGranted) return true;
+
+      if (status.isPermanentlyDenied && openSettingsIfDenied) {
+        await openAppSettings();
+      }
+      return false;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static Future<void> ensureStoragePermissions() async {
+    try {
+      await [
+        Permission.storage,
+        Permission.photos,
+        Permission.videos,
+        Permission.audio,
+      ].request();
+    } catch (_) {}
+  }
 }
 
 class CsvExportService {
@@ -48,6 +99,7 @@ class CsvExportService {
     required String fileBaseName,
     required List<List<dynamic>> rows,
   }) async {
+    await AppPermissionsService.ensureStoragePermissions();
     final bytes = _buildUtf8BomCsvBytes(rows);
     final stamp = DateTime.now().toIso8601String().replaceAll(':', '-').split('.').first;
     final fileName = '${fileBaseName}_$stamp.csv';
@@ -1081,6 +1133,29 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     torchEnabled: false,
   );
   bool _handled = false;
+  bool _checkingPermission = true;
+  bool _permissionGranted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCameraWithPermission();
+  }
+
+  Future<void> _initCameraWithPermission() async {
+    setState(() => _checkingPermission = true);
+    final granted = await AppPermissionsService.ensureCameraPermission(openSettingsIfDenied: false);
+    if (!mounted) return;
+    setState(() {
+      _permissionGranted = granted;
+      _checkingPermission = false;
+    });
+    if (granted) {
+      try {
+        await _controller.start();
+      } catch (_) {}
+    }
+  }
 
   @override
   void dispose() {
@@ -1131,71 +1206,105 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           ),
         ],
       ),
-      body: Stack(
-        children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-            errorBuilder: (context, error, child) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.videocam_off, size: 52, color: Colors.redAccent),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'تعذر تشغيل الكاميرا، تأكد من منح إذن الكاميرا للتطبيق أو أن الكاميرا غير مشغلة بتطبيق آخر.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 14),
-                      ),
-                      const SizedBox(height: 14),
-                      FilledButton.icon(
-                        onPressed: () async {
-                          try {
-                            await _controller.stop();
-                            await _controller.start();
-                          } catch (_) {}
-                        },
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('إعادة تشغيل الكاميرا'),
-                      ),
-                    ],
+      body: _checkingPermission
+          ? const Center(child: CircularProgressIndicator())
+          : !_permissionGranted
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.no_photography, size: 52, color: Colors.orange),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'يلزم السماح بإذن الكاميرا لمسح الباركود.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 14),
+                        FilledButton.icon(
+                          onPressed: _initCameraWithPermission,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('طلب إذن الكاميرا الآن'),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            await AppPermissionsService.ensureCameraPermission(openSettingsIfDenied: true);
+                          },
+                          icon: const Icon(Icons.settings),
+                          label: const Text('فتح إعدادات التطبيق'),
+                        ),
+                      ],
+                    ),
                   ),
+                )
+              : Stack(
+                  children: [
+                    MobileScanner(
+                      controller: _controller,
+                      onDetect: _onDetect,
+                      errorBuilder: (context, error, child) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.videocam_off, size: 52, color: Colors.redAccent),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'تعذر تشغيل الكاميرا، تأكد من منح إذن الكاميرا للتطبيق أو أن الكاميرا غير مشغلة بتطبيق آخر.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 14),
+                                ),
+                                const SizedBox(height: 14),
+                                FilledButton.icon(
+                                  onPressed: () async {
+                                    try {
+                                      await _controller.stop();
+                                      await _controller.start();
+                                    } catch (_) {}
+                                  },
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('إعادة تشغيل الكاميرا'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    Center(
+                      child: Container(
+                        width: 260,
+                        height: 160,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.greenAccent, width: 3),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 32,
+                      left: 20,
+                      right: 20,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'وجّه الكاميرا نحو الباركود ليتم التقاطه تلقائياً',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white, fontSize: 14),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              );
-            },
-          ),
-          Center(
-            child: Container(
-              width: 260,
-              height: 160,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.greenAccent, width: 3),
-                borderRadius: BorderRadius.circular(16),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: 32,
-            left: 20,
-            right: 20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text(
-                'وجّه الكاميرا نحو الباركود ليتم التقاطه تلقائياً',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontSize: 14),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -2382,6 +2491,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    AppPermissionsService.requestStartupPermissions();
     _refreshStats();
   }
 
@@ -4184,6 +4294,7 @@ class _BackupScreenState extends State<BackupScreen> {
   @override
   void initState() {
     super.initState();
+    AppPermissionsService.ensureStoragePermissions();
     _loadBackupInfo();
   }
 
@@ -4233,6 +4344,7 @@ class _BackupScreenState extends State<BackupScreen> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      await AppPermissionsService.ensureStoragePermissions();
       await DatabaseHelper.instance.database;
       final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
       final dbFile = File(dbPath);
@@ -4257,6 +4369,7 @@ class _BackupScreenState extends State<BackupScreen> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      await AppPermissionsService.ensureStoragePermissions();
       await DatabaseHelper.instance.database;
       final dbPath = await DatabaseHelper.instance.getDatabaseFilePath();
       final dbFile = File(dbPath);
@@ -4302,6 +4415,7 @@ class _BackupScreenState extends State<BackupScreen> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      await AppPermissionsService.ensureStoragePermissions();
       final result = await FilePicker.platform.pickFiles(
         dialogTitle: 'اختر ملف النسخة الاحتياطية (.db)',
         type: FileType.any,
@@ -4336,12 +4450,9 @@ class _BackupScreenState extends State<BackupScreen> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      await AppPermissionsService.ensureStoragePermissions();
       if (!await file.exists()) return;
-      final bytes = await file.readAsBytes();
-      await Printing.sharePdf(
-        bytes: bytes,
-        filename: p.basename(file.path),
-      );
+      await Share.shareXFiles([XFile(file.path)], text: 'نسخة احتياطية Nebras SofT Pos');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
