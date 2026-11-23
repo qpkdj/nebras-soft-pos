@@ -220,6 +220,7 @@ class DatabaseHelper {
       )
     ''');
 
+    final generatedDeviceId = 'NS-${DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase()}';
     await db.insert('categories', {'name': 'عام', 'color': '#1545B5'});
     await db.insert('settings', {'key': 'shop_name', 'value': 'نبراس SofT لنقاط البيع'});
     await db.insert('settings', {'key': 'shop_phone', 'value': ''});
@@ -229,6 +230,9 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'tax_percentage', 'value': '0'});
     await db.insert('settings', {'key': 'printer_paper', 'value': '80mm'});
     await db.insert('settings', {'key': 'desktop_sync_host', 'value': ''});
+    await db.insert('settings', {'key': 'admin_pin', 'value': ''});
+    await db.insert('settings', {'key': 'receipt_footer', 'value': 'شكراً لتعاملكم معنا • Nebras SofT Pos'});
+    await db.insert('settings', {'key': 'device_id', 'value': generatedDeviceId});
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -272,6 +276,17 @@ class DatabaseHelper {
     }
   }
 
+  Future<void> clearDemoTransactionsOnly() async {
+    final db = await instance.database;
+    await db.transaction((txn) async {
+      await txn.delete('invoice_items');
+      await txn.delete('invoices');
+      await txn.delete('vouchers');
+      await txn.delete('expenses');
+      await txn.update('contacts', {'balance': 0.0});
+    });
+  }
+
   Future<List<DbRow>> queryAllCategories() async {
     final db = await instance.database;
     return await db.query('categories', orderBy: 'id ASC');
@@ -303,6 +318,9 @@ class DatabaseHelper {
       'tax_percentage': '0',
       'printer_paper': '80mm',
       'desktop_sync_host': '',
+      'admin_pin': '',
+      'receipt_footer': 'شكراً لتعاملكم معنا • Nebras SofT Pos',
+      'device_id': '',
     };
     for (final r in rows) {
       final k = r['key']?.toString();
@@ -310,6 +328,15 @@ class DatabaseHelper {
       if (k != null && k.isNotEmpty) {
         map[k] = v;
       }
+    }
+    if ((map['device_id'] ?? '').trim().isEmpty) {
+      final newDevId = 'NS-${DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase()}';
+      map['device_id'] = newDevId;
+      await db.insert(
+        'settings',
+        {'key': 'device_id', 'value': newDevId},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     }
     return map;
   }
@@ -1477,6 +1504,7 @@ class ThermalPdfService {
     final String shopPhone = (settings['shop_phone'] ?? '').trim();
     final String shopAddress = (settings['shop_address'] ?? '').trim();
     final String currency = (settings['currency_symbol'] ?? 'ر.ي').trim();
+    final String footerText = (settings['receipt_footer'] ?? 'شكراً لتعاملكم معنا • Nebras SofT Pos').trim();
 
     final String invNum = (invoice['invoice_number'] ?? '').toString();
     final String rawDate = (invoice['date'] ?? '').toString();
@@ -1644,7 +1672,7 @@ class ThermalPdfService {
                 pw.SizedBox(height: 8),
                 pw.Divider(thickness: 0.5),
                 pw.Text(
-                  'شكراً لتعاملكم معنا • Nebras SofT Pos',
+                  footerText.isEmpty ? 'شكراً لتعاملكم معنا • Nebras SofT Pos' : footerText,
                   textAlign: pw.TextAlign.center,
                   style: const pw.TextStyle(fontSize: 8),
                 ),
@@ -2283,13 +2311,16 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  static const String _appVersion = 'v1.5.0';
+  static const String _appVersion = 'v1.6.0';
 
   int _productsCount = 0;
   String _shopName = 'نبراس SofT لنقاط البيع';
   String _currencySymbol = 'ر.ي';
   String _printerPaper = '80mm';
   String _desktopSyncHost = '';
+  String _adminPin = '';
+  String _receiptFooter = 'شكراً لتعاملكم معنا • Nebras SofT Pos';
+  String _deviceId = '';
   bool _dbReady = false;
 
   static const List<_ModuleItem> _modules = [
@@ -2319,6 +2350,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _currencySymbol = settings['currency_symbol'] ?? 'ر.ي';
         _printerPaper = settings['printer_paper'] ?? '80mm';
         _desktopSyncHost = settings['desktop_sync_host'] ?? '';
+        _adminPin = settings['admin_pin'] ?? '';
+        _receiptFooter = settings['receipt_footer'] ?? 'شكراً لتعاملكم معنا • Nebras SofT Pos';
+        _deviceId = settings['device_id'] ?? '';
         _dbReady = true;
       });
     } catch (_) {
@@ -2329,7 +2363,55 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<bool> _verifyPinIfRequired(String sectionTitle) async {
+    if (_adminPin.trim().isEmpty) return true;
+    final pinCtrl = TextEditingController();
+    bool allowed = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('رمز الحماية PIN • $sectionTitle', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        content: TextField(
+          controller: pinCtrl,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          maxLength: 8,
+          decoration: const InputDecoration(
+            labelText: 'أدخل رمز PIN',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (pinCtrl.text.trim() == _adminPin.trim()) {
+                allowed = true;
+                Navigator.of(ctx).pop();
+              } else {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  const SnackBar(content: Text('رمز PIN غير صحيح')),
+                );
+              }
+            },
+            child: const Text('دخول'),
+          ),
+        ],
+      ),
+    );
+    return allowed;
+  }
+
   Future<void> _onModuleTap(String moduleName) async {
+    if (moduleName == 'التقارير والأرباح' || moduleName == 'النسخ الاحتياطي') {
+      final ok = await _verifyPinIfRequired(moduleName);
+      if (!ok || !mounted) return;
+    }
+
     Widget? targetScreen;
     if (moduleName == 'إدارة الأصناف') {
       targetScreen = const ProductsScreen();
@@ -2353,6 +2435,219 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       _refreshStats();
     }
+  }
+
+  Future<void> _showPinSetupDialog() async {
+    final pinCtrl = TextEditingController(text: _adminPin);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('رمز حماية PIN للشاشات الحساسة', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'اتركه فارغاً لإلغاء القفل، أو أدخل رمزاً رقمياً لحماية التقارير والنسخ الاحتياطي والإعدادات.',
+              style: TextStyle(fontSize: 12.5),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: pinCtrl,
+              keyboardType: TextInputType.number,
+              maxLength: 8,
+              decoration: const InputDecoration(
+                labelText: 'رمز PIN الجديد',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await DatabaseHelper.instance.saveSettingsMap({'admin_pin': pinCtrl.text.trim()});
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              await _refreshStats();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    pinCtrl.text.trim().isEmpty
+                        ? 'تم إيقاف رمز الحماية PIN'
+                        : 'تم حفظ رمز الحماية PIN بنجاح',
+                  ),
+                ),
+              );
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showReceiptFooterDialog() async {
+    final footerCtrl = TextEditingController(text: _receiptFooter);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('تذييل الفاتورة المخصص', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        content: TextField(
+          controller: footerCtrl,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            labelText: 'النص الختامي أسفل الفاتورة',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final nextFooter = footerCtrl.text.trim().isEmpty
+                  ? 'شكراً لتعاملكم معنا • Nebras SofT Pos'
+                  : footerCtrl.text.trim();
+              await DatabaseHelper.instance.saveSettingsMap({'receipt_footer': nextFooter});
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              await _refreshStats();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('تم حفظ تذييل الفاتورة المخصص')),
+              );
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showClearDemoDataDialog() async {
+    bool confirmed = false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('تصفير بيانات التجربة', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFDC2626))),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'سيتم حذف الفواتير وعناصرها والسندات والمصروفات وتصفير أرصدة العملاء/الموردين مع الإبقاء على الأصناف والإعدادات.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: confirmed,
+                onChanged: (v) => setDialogState(() => confirmed = v ?? false),
+                title: const Text('أؤكد رغبتي في مسح العمليات التجريبية', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+              onPressed: !confirmed
+                  ? null
+                  : () async {
+                      await DatabaseHelper.instance.clearDemoTransactionsOnly();
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                      await _refreshStats();
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('تم تصفير الفواتير والعمليات التجريبية بنجاح')),
+                      );
+                    },
+              child: const Text('تنفيذ التصفير'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showQuickGuideDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('دليل الاستخدام السريع', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('1. أضف التصنيفات والأصناف مع الأسعار والكميات والباركود من "إدارة الأصناف".'),
+              SizedBox(height: 8),
+              Text('2. سجّل فواتير الشراء من "فواتير المشتريات" لزيادة المخزون وتحديث تكلفة الشراء.'),
+              SizedBox(height: 8),
+              Text('3. نفّذ البيع واطبع أو شارك الفاتورة الحرارية PDF من "نقطة البيع (POS)".'),
+              SizedBox(height: 8),
+              Text('4. راجع المتوفر النقدي في "حركات اليومية والصندوق" وصافي الربح في "التقارير والأرباح".'),
+              SizedBox(height: 8),
+              Text('5. خذ نسخة احتياطية بانتظام من "النسخ الاحتياطي".'),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showAboutDeviceDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حول التطبيق ومعرّف الجهاز', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('البرنامج: Nebras SofT Pos'),
+            const SizedBox(height: 6),
+            const Text('الإصدار: $_appVersion'),
+            const SizedBox(height: 6),
+            Text('معرّف الجهاز (Device ID): $_deviceId'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: _deviceId));
+              if (ctx.mounted) {
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('تم نسخ معرّف الجهاز إلى الحافظة')),
+                );
+              }
+            },
+            child: const Text('نسخ Device ID'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showContactDeveloperDialog() async {
@@ -2514,6 +2809,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               OutlinedButton.icon(
                 onPressed: () async {
                   Navigator.of(ctx).pop();
+                  final ok = await _verifyPinIfRequired('النسخ الاحتياطي');
+                  if (!ok || !mounted) return;
                   await Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const BackupScreen()),
                   );
@@ -2611,6 +2908,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: EdgeInsets.zero,
                 children: [
                   ListTile(
+                    leading: const Icon(Icons.lock_outline, color: Color(0xFFDC2626)),
+                    title: const Text('رمز حماية PIN'),
+                    subtitle: Text(_adminPin.isEmpty ? 'غير مفعّل' : 'مفعّل'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showPinSetupDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.edit_note, color: Color(0xFF0D7C66)),
+                    title: const Text('تذييل الفاتورة المخصص'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showReceiptFooterDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.delete_sweep, color: Color(0xFFDC2626)),
+                    title: const Text('تصفير بيانات التجربة'),
+                    onTap: () async {
+                      Navigator.of(context).pop();
+                      final ok = await _verifyPinIfRequired('تصفير بيانات التجربة');
+                      if (!ok || !mounted) return;
+                      await _showClearDemoDataDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.menu_book_outlined, color: Color(0xFF0369A1)),
+                    title: const Text('دليل الاستخدام السريع'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showQuickGuideDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.perm_device_information, color: Color(0xFF334155)),
+                    title: const Text('حول التطبيق ومعرّف الجهاز'),
+                    subtitle: Text(_deviceId.isEmpty ? _appVersion : 'ID: $_deviceId'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showAboutDeviceDialog();
+                    },
+                  ),
+                  const Divider(),
+                  ListTile(
                     leading: const Icon(Icons.support_agent, color: Color(0xFF0F2C7E)),
                     title: const Text('التواصل مع المطور'),
                     onTap: () {
@@ -2650,6 +2992,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     title: const Text('الإعدادات'),
                     onTap: () async {
                       Navigator.of(context).pop();
+                      final ok = await _verifyPinIfRequired('الإعدادات');
+                      if (!ok || !mounted) return;
                       await Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const SettingsScreen()),
                       );
@@ -4190,7 +4534,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           decoration: const InputDecoration(
                             labelText: 'سقف الآجل',
-                            border: OutlineInputBorder(),
+                            border: const OutlineInputBorder(),
                           ),
                         ),
                       ),
@@ -4201,7 +4545,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
                             labelText: 'مهلة السداد (يوم)',
-                            border: OutlineInputBorder(),
+                            border: const OutlineInputBorder(),
                           ),
                         ),
                       ),
