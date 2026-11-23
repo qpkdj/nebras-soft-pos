@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path/path.dart' as p;
@@ -226,6 +227,8 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'currency_name', 'value': 'YER'});
     await db.insert('settings', {'key': 'currency_symbol', 'value': 'ر.ي'});
     await db.insert('settings', {'key': 'tax_percentage', 'value': '0'});
+    await db.insert('settings', {'key': 'printer_paper', 'value': '80mm'});
+    await db.insert('settings', {'key': 'desktop_sync_host', 'value': ''});
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -298,6 +301,8 @@ class DatabaseHelper {
       'currency_name': 'YER',
       'currency_symbol': 'ر.ي',
       'tax_percentage': '0',
+      'printer_paper': '80mm',
+      'desktop_sync_host': '',
     };
     for (final r in rows) {
       final k = r['key']?.toString();
@@ -1274,7 +1279,7 @@ class ThermalPdfService {
 
     final barcodeCtrl = TextEditingController(text: initialCode);
     int copies = 4;
-    bool isA4Sheet = true;
+    bool isA4Sheet = (settings['printer_paper'] ?? '80mm') != '58mm';
     bool busy = false;
 
     await showDialog<void>(
@@ -1452,7 +1457,7 @@ class ThermalPdfService {
     required DbRow invoice,
     required List<DbRow> items,
     required Map<String, String> settings,
-    bool is80mm = true,
+    bool? is80mm,
   }) async {
     final fontRegular = await PdfGoogleFonts.cairoRegular();
     final fontBold = await PdfGoogleFonts.cairoBold();
@@ -1464,7 +1469,8 @@ class ThermalPdfService {
       ),
     );
 
-    final pageFormat = is80mm ? PdfPageFormat.roll80 : PdfPageFormat.roll57;
+    final bool resolved80mm = is80mm ?? ((settings['printer_paper'] ?? '80mm') != '58mm');
+    final pageFormat = resolved80mm ? PdfPageFormat.roll80 : PdfPageFormat.roll57;
     final String invType = (invoice['type'] ?? 'sale').toString();
     final bool isCustomerSide = invType == 'sale' || invType == 'sale_return';
     final String shopName = (settings['shop_name'] ?? 'نبراس SofT لنقاط البيع').trim();
@@ -1908,7 +1914,7 @@ class ThermalPdfService {
   static Future<void> printThermalInvoice(
     BuildContext context,
     String invoiceNumber, {
-    bool is80mm = true,
+    bool? is80mm,
   }) async {
     final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
     if (details.isEmpty) return;
@@ -1932,7 +1938,7 @@ class ThermalPdfService {
   static Future<void> shareInvoicePdf(
     BuildContext context,
     String invoiceNumber, {
-    bool is80mm = true,
+    bool? is80mm,
   }) async {
     final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
     if (details.isEmpty) return;
@@ -2140,7 +2146,8 @@ class ThermalPdfService {
     String invoiceNumber, {
     VoidCallback? onReturnSaved,
   }) async {
-    bool is80mm = true;
+    final settings = await DatabaseHelper.instance.getSettingsMap() as Map<String, String>;
+    bool is80mm = (settings['printer_paper'] ?? '80mm') != '58mm';
     final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
     final invType = ((details['invoice'] as DbRow?)?['type'] ?? '').toString();
     final bool canReturn = invType == 'sale' || invType == 'purchase';
@@ -2276,9 +2283,13 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  static const String _appVersion = 'v1.5.0';
+
   int _productsCount = 0;
   String _shopName = 'نبراس SofT لنقاط البيع';
   String _currencySymbol = 'ر.ي';
+  String _printerPaper = '80mm';
+  String _desktopSyncHost = '';
   bool _dbReady = false;
 
   static const List<_ModuleItem> _modules = [
@@ -2289,7 +2300,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _ModuleItem('حركات اليومية والصندوق', Icons.account_balance_wallet, Color(0xFF0F766E)),
     _ModuleItem('التقارير والأرباح', Icons.bar_chart, Color(0xFFDC2626)),
     _ModuleItem('النسخ الاحتياطي', Icons.settings_backup_restore, Color(0xFF334155)),
-    _ModuleItem('الإعدادات', Icons.settings, Color(0xFF0369A1)),
   ];
 
   @override
@@ -2307,6 +2317,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _productsCount = products.length;
         _shopName = settings['shop_name'] ?? 'نبراس SofT لنقاط البيع';
         _currencySymbol = settings['currency_symbol'] ?? 'ر.ي';
+        _printerPaper = settings['printer_paper'] ?? '80mm';
+        _desktopSyncHost = settings['desktop_sync_host'] ?? '';
         _dbReady = true;
       });
     } catch (_) {
@@ -2333,8 +2345,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       targetScreen = const ReportsScreen();
     } else if (moduleName == 'النسخ الاحتياطي') {
       targetScreen = const BackupScreen();
-    } else if (moduleName == 'الإعدادات') {
-      targetScreen = const SettingsScreen();
     }
 
     if (targetScreen != null) {
@@ -2345,15 +2355,343 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _showContactDeveloperDialog() async {
+    const devInfo = 'فريق نبراس SofT — دعم فني وتطوير أنظمة نقاط البيع';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('التواصل مع المطور', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('النظام: Nebras SofT Pos'),
+            SizedBox(height: 6),
+            Text('المطور: نبراس SofT'),
+            SizedBox(height: 6),
+            Text('للدعم الفني والطلبات المخصصة يرجى التواصل عبر قنوات نبراس SofT المعتمدة.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(const ClipboardData(text: devInfo));
+              if (ctx.mounted) {
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('تم نسخ بيانات المطور إلى الحافظة')),
+                );
+              }
+            },
+            child: const Text('نسخ البيانات'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showCheckUpdateDialog() async {
+    bool checking = true;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          if (checking) {
+            Future.delayed(const Duration(milliseconds: 650), () {
+              if (ctx.mounted) {
+                setDialogState(() => checking = false);
+              }
+            });
+          }
+          return AlertDialog(
+            title: const Text('البحث عن تحديث جديد', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: checking
+                ? const Row(
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(width: 14),
+                      Expanded(child: Text('جاري التحقق من رقم الإصدار...')),
+                    ],
+                  )
+                : const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('الإصدار الحالي المثبت: $_appVersion'),
+                      SizedBox(height: 8),
+                      Text('أنت تعمل على أحدث إصدار متاح في هذه الحزمة. عند توفر إصدار جديد يمكنك تحميله وتثبيته مباشرة.'),
+                    ],
+                  ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('حسناً'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showPrinterSettingsDialog() async {
+    bool selected80mm = _printerPaper != '58mm';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('إعدادات الطابعة', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('اختر مقاس الورق الافتراضي للطباعة الحرارية:'),
+              const SizedBox(height: 12),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: true, label: Text('80mm')),
+                  ButtonSegment(value: false, label: Text('58mm')),
+                ],
+                selected: {selected80mm},
+                onSelectionChanged: (sel) {
+                  setDialogState(() => selected80mm = sel.first);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final nextPaper = selected80mm ? '80mm' : '58mm';
+                await DatabaseHelper.instance.saveSettingsMap({'printer_paper': nextPaper});
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                await _refreshStats();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('تم حفظ مقاس الطابعة الافتراضي: $nextPaper')),
+                );
+              },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDesktopSyncDialog() async {
+    final hostCtrl = TextEditingController(text: _desktopSyncHost);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('الربط مع نسخة الكمبيوتر', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'أدخل عنوان جهاز الكمبيوتر أو مسار المزامنة على الشبكة المحلية، أو صدّر قاعدة البيانات للمشاركة مع نسخة سطح المكتب:',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: hostCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'عنوان جهاز الكمبيوتر / رابط الربط',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  Navigator.of(ctx).pop();
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const BackupScreen()),
+                  );
+                  _refreshStats();
+                },
+                icon: const Icon(Icons.folder_shared),
+                label: const Text('فتح شاشة تصدير واستعادة قاعدة البيانات'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await DatabaseHelper.instance.saveSettingsMap({
+                'desktop_sync_host': hostCtrl.text.trim(),
+              });
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              await _refreshStats();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('تم حفظ إعدادات الربط مع نسخة الكمبيوتر')),
+              );
+            },
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showPrivacyPolicyDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('سياسة الخصوصية', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const SingleChildScrollView(
+          child: Text(
+            'يُخزِّن تطبيق Nebras SofT Pos جميع بيانات المحل والأصناف والعملاء والموردين والفواتير والمصروفات محلياً على جهازك داخل قاعدة البيانات المحلية دون رفع بياناتك إلى خوادم خارجية تلقائياً. أنت تملك تحكماً كاملاً في إنشاء النسخ الاحتياطية ومشاركتها أو تصديرها.',
+            style: TextStyle(fontSize: 13.5, height: 1.5),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _shareAppInfo() async {
+    const shareText =
+        'تطبيق Nebras SofT Pos لإدارة نقاط البيع والمخزون والفواتير والعملاء والموردين والحسابات — من تطوير نبراس SofT.';
+    await Clipboard.setData(const ClipboardData(text: shareText));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم نسخ نص مشاركة البرنامج إلى الحافظة')),
+    );
+  }
+
+  Widget _buildSpecialDrawer() {
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(18),
+              color: const Color(0xFF0F2C7E),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.tune, color: Colors.white, size: 30),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'إعدادات وخدمات خاصة',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$_shopName • $_appVersion',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.support_agent, color: Color(0xFF0F2C7E)),
+                    title: const Text('التواصل مع المطور'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showContactDeveloperDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.system_update, color: Color(0xFF0D7C66)),
+                    title: const Text('البحث عن تحديث جديد'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showCheckUpdateDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.print, color: Color(0xFFD97706)),
+                    title: const Text('إعدادات الطابعة'),
+                    subtitle: Text('المقاس الحالي: $_printerPaper'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showPrinterSettingsDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.computer, color: Color(0xFF7C3AED)),
+                    title: const Text('الربط مع نسخة الكمبيوتر'),
+                    subtitle: Text(_desktopSyncHost.isEmpty ? 'غير مضبوط' : _desktopSyncHost),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showDesktopSyncDialog();
+                    },
+                  ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.settings, color: Color(0xFF0369A1)),
+                    title: const Text('الإعدادات'),
+                    onTap: () async {
+                      Navigator.of(context).pop();
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                      );
+                      _refreshStats();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.privacy_tip_outlined, color: Color(0xFF334155)),
+                    title: const Text('سياسة الخصوصية'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _showPrivacyPolicyDialog();
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.share, color: Color(0xFF0F766E)),
+                    title: const Text('مشاركة البرنامج'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _shareAppInfo();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      drawer: _buildSpecialDrawer(),
       appBar: AppBar(
         title: const Text(
           'Nebras SofT Pos',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
         backgroundColor: const Color(0xFF0F2C7E),
+        iconTheme: const IconThemeData(color: Colors.white),
         centerTitle: true,
       ),
       body: Padding(
