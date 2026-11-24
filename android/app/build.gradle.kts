@@ -28,9 +28,8 @@ android {
         multiDexEnabled = true
     }
 
-    buildTypes {
+        buildTypes {
         release {
-            // توقيع النسخة بمفتاح التطوير لتعمل مباشرة في GitHub Actions
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
@@ -40,6 +39,7 @@ android {
             )
         }
     }
+
 }
 
 flutter {
