@@ -2202,13 +2202,11 @@ class BarcodeScannerScreen extends StatefulWidget {
   State<BarcodeScannerScreen> createState() => _BarcodeScannerScreenState();
 }
 
-class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
-    with WidgetsBindingObserver {
+class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   final MobileScannerController _controller = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     facing: CameraFacing.back,
     torchEnabled: false,
-    autoStart: false,
   );
   bool _handled = false;
   bool _checkingPermission = true;
@@ -2218,22 +2216,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _initCameraWithPermission();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_permissionGranted || _handled) return;
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
-      _controller.stop().catchError((_) {});
-    } else if (state == AppLifecycleState.resumed) {
-      Future.delayed(const Duration(milliseconds: 250), () {
-        if (mounted && _permissionGranted && !_handled) {
-          _controller.start().catchError((_) {});
-        }
-      });
-    }
   }
 
   Future<void> _initCameraWithPermission() async {
@@ -2246,16 +2229,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
       _permissionGranted = granted;
       _checkingPermission = false;
     });
-    if (granted) {
-      try {
-        await _controller.stop();
-      } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted) return;
-      try {
-        await _controller.start();
-      } catch (_) {}
-    }
   }
 
   Future<void> _enterBarcodeManually() async {
@@ -2292,7 +2265,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
   }
@@ -2407,14 +2379,12 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                         );
                       },
                     ),
-
                     IgnorePointer(
                       child: CustomPaint(
                         painter: _NsScannerViewfinderPainter(),
                         size: Size.infinite,
                       ),
                     ),
-
                     SafeArea(
                       child: Directionality(
                         textDirection: TextDirection.ltr,
@@ -2473,7 +2443,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                         ),
                       ),
                     ),
-
                     SafeArea(
                       child: Align(
                         alignment: Alignment.bottomCenter,
