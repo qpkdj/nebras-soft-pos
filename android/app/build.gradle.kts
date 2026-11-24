@@ -1,11 +1,14 @@
+import com.android.build.api.dsl.ApplicationExtension
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    // يجب أن يكون إضافة Flutter بعد إضافتي Android و Kotlin
+    // يجب أن تكون إضافة Flutter بعد إضافتي Android و Kotlin
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-android {
+configure<ApplicationExtension> {
     namespace = "com.nebras.soft.pos"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -15,20 +18,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
         applicationId = "com.nebras.soft.pos"
-        minSdk = 21
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
     }
 
-        buildTypes {
+    buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
@@ -39,7 +38,12 @@ android {
             )
         }
     }
+}
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
 }
 
 flutter {
