@@ -172,6 +172,10 @@ class DeviceLicenseService {
   static const String appSecretSalt = 'NEBRAS_SOFT_POS_2026_SECRET_KEY_#967';
   static const String developerWhatsappUrl = 'https://wa.me/967735114406';
 
+  // رابط ملف سحب التراخيص على GitHub (عدّل اسم المستودع إذا اخترت اسماً آخر)
+  static const String revocationListUrl =
+      'https://raw.githubusercontent.com/qpkdj/nebras-license-control/main/revoked.json';
+
   static String normalizePhone(String phone) {
     return phone.replaceAll(RegExp(r'[^0-9+]'), '').trim();
   }
@@ -179,7 +183,6 @@ class DeviceLicenseService {
   static bool isValidUserName(String name) {
     final clean = name.trim();
     if (clean.isEmpty) return false;
-    // يسمح فقط بالحروف العربية والإنجليزية والمسافات (ممنوع النقاط أو الأرقام أو الرموز)
     final onlyLettersAndSpaces = RegExp(r'^[a-zA-Z\u0621-\u064A\s]+$').hasMatch(clean);
     final letterCount = clean.replaceAll(RegExp(r'\s+'), '').length;
     return onlyLettersAndSpaces && letterCount >= 2;
@@ -234,6 +237,56 @@ class DeviceLicenseService {
     return 'NSACT-${hex.substring(0, 5)}-${hex.substring(5, 10)}-$cleanExp-${hex.substring(10, 14)}';
   }
 
+  /// فحص القائمة السوداء على GitHub عند توفر الإنترنت
+  static Future<bool> _checkRemoteRevocation({
+    required String fingerprint,
+    required String phone,
+    required String serial,
+  }) async {
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+      final req = await client.getUrl(Uri.parse(revocationListUrl));
+      final res = await req.close().timeout(const Duration(seconds: 4));
+      if (res.statusCode != 200) {
+        client.close(force: true);
+        return false;
+      }
+      final body = await res.transform(utf8.decoder).join();
+      client.close(force: true);
+
+      final decoded = jsonDecode(body);
+      if (decoded is! DbRow) return false;
+
+      final List<dynamic> revFps = (decoded['revoked_fingerprints'] as List?) ?? [];
+      final List<dynamic> revSerials = (decoded['revoked_serials'] as List?) ?? [];
+      final List<dynamic> revPhones = (decoded['revoked_phones'] as List?) ?? [];
+      final String revMsg = (decoded['message'] ??
+              'تم سحب ترخيص التطبيق من قبل المطور لعدم السداد. يرجى التواصل مع نبراس SofT.')
+          .toString();
+
+      final fpUpper = fingerprint.trim().toUpperCase();
+      final serUpper = serial.trim().toUpperCase();
+      final cleanPhone = normalizePhone(phone);
+
+      final isFpRevoked = revFps.any((e) => e.toString().trim().toUpperCase() == fpUpper);
+      final isSerRevoked = revSerials.any((e) => e.toString().trim().toUpperCase() == serUpper);
+      final isPhoneRevoked = revPhones.any((e) => normalizePhone(e.toString()) == cleanPhone);
+
+      if (isFpRevoked || isSerRevoked || isPhoneRevoked) {
+        // حفظ السحب محلياً ومسح السيريال حتى يبقى مقفولاً بدون إنترنت
+        await DatabaseHelper.instance.saveSettingsMap({
+          'licensed_serial': '',
+          'licensed_revoked': '1',
+          'licensed_revoked_msg': revMsg,
+        });
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false; // في حال عدم وجود إنترنت يستمر العمل بشكل طبيعي
+    }
+  }
+
   static Future<bool> isDeviceActivated() async {
     final settings = await DatabaseHelper.instance.getSettingsMap();
     final savedFp = (settings['licensed_fingerprint'] ?? '').trim();
@@ -274,6 +327,16 @@ class DeviceLicenseService {
       }
     } catch (_) {}
 
+    // فحص سحب الترخيص عن بُعد عند توفر الإنترنت
+    final revoked = await _checkRemoteRevocation(
+      fingerprint: currentFp,
+      phone: savedPhone,
+      serial: savedSerial,
+    );
+    if (revoked) {
+      return false;
+    }
+
     return true;
   }
 
@@ -312,6 +375,20 @@ class DeviceLicenseService {
     }
 
     final currentFp = await getOrCreateDeviceFingerprint();
+
+    // منع إعادة التفعيل بنفس البيانات إذا كانت في القائمة السوداء
+    final isRevoked = await _checkRemoteRevocation(
+      fingerprint: currentFp,
+      phone: cleanPhone,
+      serial: cleanSerial,
+    );
+    if (isRevoked) {
+      return {
+        'ok': false,
+        'reason': 'تم سحب ترخيص هذا الجهاز/السيريال من قبل المطور. يرجى التواصل مع نبراس SofT.',
+      };
+    }
+
     final settings = await DatabaseHelper.instance.getSettingsMap();
 
     final StringMap usedMap = {};
@@ -355,6 +432,8 @@ class DeviceLicenseService {
       'licensed_fingerprint': currentFp,
       'licensed_serial': cleanSerial,
       'licensed_expiry_ymd': expiryYmd,
+      'licensed_revoked': '0',
+      'licensed_revoked_msg': '',
       'used_serials_json': jsonEncode(usedMap),
     });
 
@@ -365,6 +444,7 @@ class DeviceLicenseService {
     return {'ok': true, 'reason': msg};
   }
 }
+
 
 class ActivationGateScreen extends StatefulWidget {
   final Widget childWhenActivated;
