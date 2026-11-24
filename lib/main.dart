@@ -1323,6 +1323,7 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'licensed_revoked', 'value': '0'});
     await db.insert('settings', {'key': 'licensed_revoked_msg', 'value': ''});
     await db.insert('settings', {'key': 'used_serials_json', 'value': '{}'});
+    await db.insert('settings', {'key': 'saved_quotes_json', 'value': '[]'});
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -1423,6 +1424,7 @@ class DatabaseHelper {
       'licensed_revoked': '0',
       'licensed_revoked_msg': '',
       'used_serials_json': '{}',
+      'saved_quotes_json': '[]',
       'printer_a4_footer': '',
       'printer_text_height': '10',
       'printer_type': 'PDF',
@@ -2211,6 +2213,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
   bool _handled = false;
   bool _checkingPermission = true;
   bool _permissionGranted = false;
+  bool _torchOn = false;
 
   @override
   void initState() {
@@ -2306,44 +2309,21 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
     }
   }
 
+  Future<void> _toggleFlash() async {
+    try {
+      await _controller.toggleTorch();
+      if (mounted) {
+        setState(() => _torchOn = !_torchOn);
+      }
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.title,
-          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-        backgroundColor: const Color(0xFF0F2C7E),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          IconButton(
-            tooltip: 'إدخال الباركود يدوياً',
-            icon: const Icon(Icons.keyboard),
-            onPressed: _enterBarcodeManually,
-          ),
-          IconButton(
-            tooltip: 'تشغيل/إطفاء الفلاش',
-            icon: const Icon(Icons.flash_on),
-            onPressed: () async {
-              try {
-                await _controller.toggleTorch();
-              } catch (_) {}
-            },
-          ),
-          IconButton(
-            tooltip: 'تبديل الكاميرا',
-            icon: const Icon(Icons.cameraswitch),
-            onPressed: () async {
-              try {
-                await _controller.switchCamera();
-              } catch (_) {}
-            },
-          ),
-        ],
-      ),
+      backgroundColor: Colors.black,
       body: _checkingPermission
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: Colors.white))
           : !_permissionGranted
               ? Center(
                   child: Padding(
@@ -2356,7 +2336,11 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                         const Text(
                           'يلزم السماح بإذن الكاميرا لمسح الباركود.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
                         ),
                         const SizedBox(height: 14),
                         FilledButton.icon(
@@ -2366,6 +2350,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                         ),
                         const SizedBox(height: 8),
                         OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
                           onPressed: () async {
                             await AppPermissionsService.ensureCameraPermission(openSettingsIfDenied: true);
                           },
@@ -2377,6 +2362,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                   ),
                 )
               : Stack(
+                  fit: StackFit.expand,
                   children: [
                     MobileScanner(
                       controller: _controller,
@@ -2394,13 +2380,13 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                                 const Text(
                                   'تعذر تشغيل الكاميرا، تأكد من منح إذن الكاميرا للتطبيق أو أن الكاميرا غير مشغلة بتطبيق آخر.',
                                   textAlign: TextAlign.center,
-                                  style: TextStyle(fontSize: 14),
+                                  style: TextStyle(fontSize: 14, color: Colors.white),
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
                                   'السبب: $errDetail',
                                   textAlign: TextAlign.center,
-                                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                  style: const TextStyle(fontSize: 12, color: Colors.white70),
                                 ),
                                 const SizedBox(height: 14),
                                 FilledButton.icon(
@@ -2410,6 +2396,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                                 ),
                                 const SizedBox(height: 8),
                                 OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
                                   onPressed: _enterBarcodeManually,
                                   icon: const Icon(Icons.keyboard),
                                   label: const Text('إدخال الباركود يدوياً'),
@@ -2420,30 +2407,98 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                         );
                       },
                     ),
-                    Center(
-                      child: Container(
-                        width: 260,
-                        height: 160,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.greenAccent, width: 3),
-                          borderRadius: BorderRadius.circular(16),
+
+                    IgnorePointer(
+                      child: CustomPaint(
+                        painter: _NsScannerViewfinderPainter(),
+                        size: Size.infinite,
+                      ),
+                    ),
+
+                    SafeArea(
+                      child: Directionality(
+                        textDirection: TextDirection.ltr,
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  color: const Color(0xFFFF0000),
+                                  child: const Text(
+                                    'NS-soft-Pos',
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontWeight: FontWeight.w900,
+                                      fontStyle: FontStyle.italic,
+                                      fontSize: 19,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                ),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'تبديل الكاميرا',
+                                      onPressed: () async {
+                                        try {
+                                          await _controller.switchCamera();
+                                        } catch (_) {}
+                                      },
+                                      icon: const Icon(
+                                        Icons.center_focus_strong,
+                                        color: Colors.white,
+                                        size: 28,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    IconButton(
+                                      tooltip: 'تشغيل / إيقاف الفلاش',
+                                      onPressed: _toggleFlash,
+                                      icon: Icon(
+                                        _torchOn ? Icons.flash_on : Icons.flash_off,
+                                        color: _torchOn ? const Color(0xFFFACC15) : Colors.white,
+                                        size: 28,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    Positioned(
-                      bottom: 32,
-                      left: 20,
-                      right: 20,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Text(
-                          'وجّه الكاميرا نحو الباركود ليتم التقاطه تلقائياً',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white, fontSize: 14),
+
+                    SafeArea(
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 18, left: 16, right: 16),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              IconButton(
+                                style: IconButton.styleFrom(backgroundColor: Colors.black54),
+                                tooltip: 'رجوع',
+                                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                              TextButton.icon(
+                                style: TextButton.styleFrom(
+                                  backgroundColor: Colors.black54,
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: _enterBarcodeManually,
+                                icon: const Icon(Icons.keyboard, size: 18),
+                                label: const Text('إدخال يدوي'),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -2451,6 +2506,70 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
                 ),
     );
   }
+}
+
+class _NsScannerViewfinderPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double boxWidth = size.width * 0.84;
+    final double boxHeight = size.height * 0.25;
+    final double left = (size.width - boxWidth) / 2;
+    final double top = (size.height - boxHeight) / 2;
+    final Rect scanRect = Rect.fromLTWH(left, top, boxWidth, boxHeight);
+
+    canvas.saveLayer(Rect.fromLTWH(0, 0, size.width, size.height), Paint());
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color.fromRGBO(0, 0, 0, 0.56),
+    );
+    canvas.drawRect(
+      scanRect,
+      Paint()..blendMode = BlendMode.clear,
+    );
+    canvas.restore();
+
+    final Paint cornerPaint = Paint()
+      ..color = Colors.white70
+      ..strokeWidth = 1.6
+      ..style = PaintingStyle.stroke;
+
+    const double innerLen = 26.0;
+    const double outerLen = 10.0;
+
+    canvas.drawLine(Offset(left - outerLen, top), Offset(left + innerLen, top), cornerPaint);
+    canvas.drawLine(Offset(left, top - outerLen), Offset(left, top + innerLen), cornerPaint);
+
+    canvas.drawLine(Offset(scanRect.right - innerLen, top), Offset(scanRect.right + outerLen, top), cornerPaint);
+    canvas.drawLine(Offset(scanRect.right, top - outerLen), Offset(scanRect.right, top + innerLen), cornerPaint);
+
+    canvas.drawLine(Offset(left - outerLen, scanRect.bottom), Offset(left + innerLen, scanRect.bottom), cornerPaint);
+    canvas.drawLine(Offset(left, scanRect.bottom - innerLen), Offset(left, scanRect.bottom + outerLen), cornerPaint);
+
+    canvas.drawLine(
+      Offset(scanRect.right - innerLen, scanRect.bottom),
+      Offset(scanRect.right + outerLen, scanRect.bottom),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      Offset(scanRect.right, scanRect.bottom - innerLen),
+      Offset(scanRect.right, scanRect.bottom + outerLen),
+      cornerPaint,
+    );
+
+    final double centerY = scanRect.center.dy;
+    final Paint laserPaint = Paint()
+      ..color = const Color(0xFFEF4444)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(Offset(left + 4, centerY), Offset(scanRect.right - 4, centerY), laserPaint);
+
+    final Paint dotPaint = Paint()
+      ..color = const Color(0xFFFACC15)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(left + boxWidth * 0.68, centerY), 2.6, dotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class ThermalPdfService {
@@ -4701,7 +4820,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 }
-
 class PrinterSettingsScreen extends StatefulWidget {
   const PrinterSettingsScreen({super.key});
 
@@ -5181,6 +5299,7 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
     );
   }
 }
+
 class CashboxScreen extends StatefulWidget {
   const CashboxScreen({super.key});
 
@@ -5576,7 +5695,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
-
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
 
@@ -7411,16 +7529,36 @@ class _PosScreenState extends State<PosScreen> {
   DbRows _products = [];
   DbRows _categories = [];
   DbRows _customers = [];
-  DbRows _cart = [];
-  int? _selectedCustomerId;
-  int? _selectedCategoryId;
-  String _paymentMethod = 'نقدي';
+
+  final List<DbRows> _slotCarts = [[], [], [], []];
+  final List<int?> _slotCustomerIds = [null, null, null, null];
+  final List<double> _slotDiscounts = [0.0, 0.0, 0.0, 0.0];
+  int _activeSlot = 0;
+
+  String? _pinnedPriceTier;
+
+  bool _showCustomerSearchBar = false;
+  String _customerSearchQuery = '';
+  final TextEditingController _customerSearchController = TextEditingController();
+  final FocusNode _customerSearchFocus = FocusNode();
+
+  bool _embeddedScannerActive = false;
+  MobileScannerController? _embeddedScannerCtrl;
+  String _lastEmbeddedCode = '';
+  DateTime _lastEmbeddedScanAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   String _search = '';
+  String _currencySymbol = 'ر.ي';
+  double _taxPercent = 0.0;
   bool _loading = true;
   bool _saving = false;
 
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _discountController = TextEditingController(text: '0');
+  final FocusNode _searchFocus = FocusNode();
+
+  DbRows get _cart => _slotCarts[_activeSlot];
+  int? get _selectedCustomerId => _slotCustomerIds[_activeSlot];
+  double get _discount => _slotDiscounts[_activeSlot];
 
   @override
   void initState() {
@@ -7430,19 +7568,43 @@ class _PosScreenState extends State<PosScreen> {
 
   @override
   void dispose() {
+    _embeddedScannerCtrl?.dispose();
+    _customerSearchController.dispose();
+    _customerSearchFocus.dispose();
     _searchController.dispose();
-    _discountController.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
+  DbRow? get _selectedCustomer {
+    if (_selectedCustomerId == null) return null;
+    for (final c in _customers) {
+      if (c['id'] == _selectedCustomerId) return c;
+    }
+    return null;
+  }
+
   String get _activePriceTier {
-    if (_selectedCustomerId == null) return 'تجزئة';
-    final customer = _customers.firstWhere(
-      (c) => c['id'] == _selectedCustomerId,
-      orElse: () => <String, dynamic>{},
-    );
-    final tier = (customer['price_tier'] ?? 'تجزئة').toString().trim();
+    if (_pinnedPriceTier != null && _pinnedPriceTier!.isNotEmpty) {
+      return _pinnedPriceTier!;
+    }
+    final cust = _selectedCustomer;
+    if (cust == null) return 'تجزئة';
+    final tier = (cust['price_tier'] ?? 'تجزئة').toString().trim();
     return tier.isEmpty ? 'تجزئة' : tier;
+  }
+
+  String get _appBarPriceTierTitle {
+    final tier = _activePriceTier;
+    if (tier == 'جملة') return 'المبيعات - سعر البيع 2';
+    if (tier == 'خاص') return 'المبيعات - سعر البيع 3';
+    return 'المبيعات - سعر البيع 1';
+  }
+
+  double get _customerPrevBalance {
+    final cust = _selectedCustomer;
+    if (cust == null) return 0.0;
+    return (cust['balance'] as num?)?.toDouble() ?? 0.0;
   }
 
   double _resolveProductPrice(DbRow product, String tier) {
@@ -7450,12 +7612,8 @@ class _PosScreenState extends State<PosScreen> {
     final double wholesale = (product['wholesale_price'] as num?)?.toDouble() ?? 0.0;
     final double special = (product['special_price'] as num?)?.toDouble() ?? 0.0;
 
-    if (tier == 'جملة' && wholesale > 0) {
-      return wholesale;
-    }
-    if (tier == 'خاص' && special > 0) {
-      return special;
-    }
+    if (tier == 'جملة' && wholesale > 0) return wholesale;
+    if (tier == 'خاص' && special > 0) return special;
     return retail;
   }
 
@@ -7478,27 +7636,104 @@ class _PosScreenState extends State<PosScreen> {
     final rows = await DatabaseHelper.instance.queryAllProducts();
     final cats = await DatabaseHelper.instance.queryAllCategories();
     final customers = await DatabaseHelper.instance.queryCustomers();
+    final settings = await DatabaseHelper.instance.getSettingsMap();
     if (!mounted) return;
     setState(() {
       _products = rows;
       _categories = cats;
       _customers = customers;
+      _currencySymbol = (settings['currency_symbol'] ?? 'ر.ي').trim();
+      _taxPercent = double.tryParse((settings['tax_percentage'] ?? '0').trim()) ?? 0.0;
       _recalculateCartPrices();
       _loading = false;
     });
   }
 
-  DbRows get _filteredProducts {
+  DbRows get _searchMatches {
     final q = _search.trim().toLowerCase();
+    if (q.isEmpty) return [];
     return _products.where((item) {
-      if (_selectedCategoryId != null && item['category_id'] != _selectedCategoryId) {
-        return false;
-      }
-      if (q.isEmpty) return true;
       final name = (item['name'] ?? '').toString().toLowerCase();
       final barcode = (item['barcode'] ?? '').toString().toLowerCase();
       return name.contains(q) || barcode.contains(q);
-    }).toList();
+    }).take(8).toList();
+  }
+
+  DbRows get _customerSearchMatches {
+    final q = _customerSearchQuery.trim().toLowerCase();
+    if (q.isEmpty) return _customers.take(6).toList();
+    return _customers.where((c) {
+      final name = (c['name'] ?? '').toString().toLowerCase();
+      final phone = (c['phone'] ?? '').toString().toLowerCase();
+      final code = (c['code'] ?? '').toString().toLowerCase();
+      return name.contains(q) || phone.contains(q) || code.contains(q);
+    }).take(8).toList();
+  }
+
+  void _toggleCustomerSearchBar() {
+    setState(() {
+      _showCustomerSearchBar = !_showCustomerSearchBar;
+      if (_showCustomerSearchBar) {
+        final currentName = _selectedCustomer?['name']?.toString() ?? '';
+        _customerSearchController.text = currentName;
+        _customerSearchQuery = '';
+      }
+    });
+    if (_showCustomerSearchBar) {
+      Future.delayed(const Duration(milliseconds: 80), () {
+        if (mounted) _customerSearchFocus.requestFocus();
+      });
+    }
+  }
+
+  void _selectExistingCustomer(DbRow customer) {
+    final int cid = customer['id'] as int;
+    final String name = (customer['name'] ?? '').toString();
+    setState(() {
+      _slotCustomerIds[_activeSlot] = cid;
+      _customerSearchController.text = name;
+      _customerSearchQuery = '';
+      _showCustomerSearchBar = false;
+      _recalculateCartPrices();
+    });
+    FocusScope.of(context).unfocus();
+  }
+
+  Future<void> _createAndSelectTypedCustomer(String rawName) async {
+    final cleanName = rawName.trim();
+    if (cleanName.isEmpty) return;
+
+    for (final c in _customers) {
+      if ((c['name'] ?? '').toString().trim().toLowerCase() == cleanName.toLowerCase()) {
+        _selectExistingCustomer(c);
+        return;
+      }
+    }
+
+    final newId = await DatabaseHelper.instance.insertContact({
+      'code': 'CUS-${DateTime.now().millisecondsSinceEpoch % 100000}',
+      'name': cleanName,
+      'type': 'customer',
+      'price_tier': 'تجزئة',
+      'credit_limit': 0.0,
+      'due_days': 30,
+      'balance': 0.0,
+    });
+
+    final updatedCustomers = await DatabaseHelper.instance.queryCustomers();
+    if (!mounted) return;
+    setState(() {
+      _customers = updatedCustomers;
+      _slotCustomerIds[_activeSlot] = newId;
+      _customerSearchController.text = cleanName;
+      _customerSearchQuery = '';
+      _showCustomerSearchBar = false;
+      _recalculateCartPrices();
+    });
+    FocusScope.of(context).unfocus();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('تم اعتماد العميل: $cleanName')),
+    );
   }
 
   double get _subTotal {
@@ -7511,14 +7746,19 @@ class _PosScreenState extends State<PosScreen> {
     return sum;
   }
 
-  double get _discount => double.tryParse(_discountController.text.trim()) ?? 0.0;
-
-  double get _netTotal {
-    final net = _subTotal - _discount;
-    return net < 0 ? 0.0 : net;
+  double get _afterDiscount {
+    final v = _subTotal - _discount;
+    return v < 0 ? 0.0 : v;
   }
 
-  void _addToCart(DbRow product) {
+  double get _taxAmount {
+    if (_taxPercent <= 0) return 0.0;
+    return _afterDiscount * (_taxPercent / 100.0);
+  }
+
+  double get _grandTotalWithTax => _afterDiscount + _taxAmount;
+
+  void _addToCart(DbRow product, {bool clearSearch = false}) {
     final int productId = product['id'] as int;
     final double stock = (product['stock_quantity'] as num?)?.toDouble() ?? 0.0;
     final double price = _resolveProductPrice(product, _activePriceTier);
@@ -7536,6 +7776,10 @@ class _PosScreenState extends State<PosScreen> {
       setState(() {
         _cart[index]['quantity'] = currentQty + 1;
         _cart[index]['price'] = price;
+        if (clearSearch) {
+          _search = '';
+          _searchController.clear();
+        }
       });
     } else {
       if (stock <= 0) {
@@ -7552,7 +7796,24 @@ class _PosScreenState extends State<PosScreen> {
           'quantity': 1.0,
           'stock_quantity': stock,
         });
+        if (clearSearch) {
+          _search = '';
+          _searchController.clear();
+        }
       });
+    }
+  }
+
+  void _onSearchSubmitted(String value) {
+    final code = value.trim();
+    if (code.isEmpty) return;
+    final exactBarcode = _products.where(
+      (item) => (item['barcode'] ?? '').toString().trim() == code,
+    ).toList();
+    if (exactBarcode.isNotEmpty) {
+      _addToCart(exactBarcode.first, clearSearch: true);
+    } else if (_searchMatches.length == 1) {
+      _addToCart(_searchMatches.first, clearSearch: true);
     }
   }
 
@@ -7569,7 +7830,7 @@ class _PosScreenState extends State<PosScreen> {
     ).toList();
 
     if (matches.isNotEmpty) {
-      _addToCart(matches.first);
+      _addToCart(matches.first, clearSearch: true);
     } else {
       setState(() {
         _search = code;
@@ -7581,341 +7842,1355 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  void _changeQty(int index, double delta) {
-    final currentQty = (_cart[index]['quantity'] as num).toDouble();
-    final stock = (_cart[index]['stock_quantity'] as num).toDouble();
-    final nextQty = currentQty + delta;
-
-    if (nextQty <= 0) {
-      setState(() => _cart.removeAt(index));
-      return;
-    }
-    if (delta > 0 && nextQty > stock) {
+  Future<void> _reprintLastInvoice() async {
+    final db = await DatabaseHelper.instance.database;
+    final rows = await db.query(
+      'invoices',
+      where: 'type = ?',
+      whereArgs: ['sale'],
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    if (!mounted) return;
+    if (rows.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('الحد الأقصى المتوفر هو $stock')),
+        const SnackBar(content: Text('لا توجد فواتير مبيعات سابقة لإعادة طباعتها')),
       );
       return;
     }
-    setState(() {
-      _cart[index]['quantity'] = nextQty;
-    });
+    final invNum = (rows.first['invoice_number'] ?? '').toString();
+    await ThermalPdfService.showInvoiceActionSheet(context, invNum);
   }
 
-  Future<void> _checkout() async {
-    if (_cart.isEmpty || _saving) return;
+  Future<void> _editPreviousSaleInvoiceDialog() async {
+    final db = await DatabaseHelper.instance.database;
+    final rows = await db.rawQuery('''
+      SELECT inv.*, COALESCE(c.name, 'عميل نقدي عام') AS contact_name
+      FROM invoices inv
+      LEFT JOIN contacts c ON c.id = inv.contact_id
+      WHERE inv.type = 'sale'
+      ORDER BY inv.id DESC
+      LIMIT 25
+    ''');
+    if (!mounted) return;
+    if (rows.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا توجد فواتير مبيعات مسجلة للتعديل')),
+      );
+      return;
+    }
 
-    if (_paymentMethod == 'آجل') {
-      if (_selectedCustomerId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('يرجى اختيار عميل مسجل عند البيع الآجل')),
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(
+          'اختر فاتورة البيع لتعديلها',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 360,
+          child: ListView.separated(
+            itemCount: rows.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (ctx, idx) {
+              final inv = rows[idx];
+              final invNum = (inv['invoice_number'] ?? '').toString();
+              final total = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
+              final dateStr = (inv['date'] ?? '').toString().split('T').first;
+              return ListTile(
+                dense: true,
+                title: Text(
+                  '$invNum • ${inv['contact_name']}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text('التاريخ: $dateStr • الدفع: ${inv['payment_method']}'),
+                trailing: Text(
+                  '${total.toStringAsFixed(2)} $_currencySymbol',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1545B5),
+                  ),
+                ),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await _loadInvoiceIntoCartForEditing(invNum);
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('إلغاء'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadInvoiceIntoCartForEditing(String invoiceNumber) async {
+    final details = await DatabaseHelper.instance.getInvoiceDetailsByNumber(invoiceNumber);
+    if (details.isEmpty) return;
+
+    final inv = details['invoice'] as DbRow;
+    final items = (details['items'] as DbRows?) ?? [];
+    final int invId = inv['id'] as int;
+    final int? contactId = inv['contact_id'] as int?;
+    final String payMethod = (inv['payment_method'] ?? 'نقدي').toString();
+    final double netTotal = (inv['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final double discount = (inv['discount'] as num?)?.toDouble() ?? 0.0;
+
+    final db = await DatabaseHelper.instance.database;
+    await db.transaction((txn) async {
+      for (final it in items) {
+        final int pid = it['product_id'] as int;
+        final double qty = (it['quantity'] as num?)?.toDouble() ?? 0.0;
+        final prodRows = await txn.query(
+          'products',
+          columns: ['stock_quantity'],
+          where: 'id = ?',
+          whereArgs: [pid],
         );
-        return;
+        if (prodRows.isNotEmpty) {
+          final cur = (prodRows.first['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+          await txn.update(
+            'products',
+            {'stock_quantity': cur + qty},
+            where: 'id = ?',
+            whereArgs: [pid],
+          );
+        }
       }
 
-      final customer = _customers.firstWhere(
-        (c) => c['id'] == _selectedCustomerId,
+      if (contactId != null && payMethod == 'آجل' && netTotal > 0) {
+        final cRows = await txn.query(
+          'contacts',
+          columns: ['balance'],
+          where: 'id = ?',
+          whereArgs: [contactId],
+        );
+        if (cRows.isNotEmpty) {
+          final oldBal = (cRows.first['balance'] as num?)?.toDouble() ?? 0.0;
+          final nextBal = (oldBal - netTotal) < 0 ? 0.0 : (oldBal - netTotal);
+          await txn.update(
+            'contacts',
+            {'balance': nextBal},
+            where: 'id = ?',
+            whereArgs: [contactId],
+          );
+        }
+      }
+
+      await txn.delete('invoice_items', where: 'invoice_id = ?', whereArgs: [invId]);
+      await txn.delete('invoices', where: 'id = ?', whereArgs: [invId]);
+    });
+
+    await _loadData();
+    if (!mounted) return;
+
+    final DbRows restoredCart = [];
+    for (final it in items) {
+      final int pid = it['product_id'] as int;
+      final prod = _products.firstWhere(
+        (p) => p['id'] == pid,
         orElse: () => <String, dynamic>{},
       );
-      final limit = (customer['credit_limit'] as num?)?.toDouble() ?? 0.0;
-      final balance = (customer['balance'] as num?)?.toDouble() ?? 0.0;
-      if (limit > 0 && (balance + _netTotal) > limit) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'تنبيه: الفاتورة ستتجاوز سقف الآجل للعميل ($limit) — رصيده الحالي $balance',
-            ),
-          ),
-        );
-        return;
+      final double stock = (prod['stock_quantity'] as num?)?.toDouble() ??
+          ((it['quantity'] as num?)?.toDouble() ?? 1.0);
+      restoredCart.add({
+        'product_id': pid,
+        'name': (it['name'] ?? '').toString(),
+        'price': (it['price'] as num?)?.toDouble() ?? 0.0,
+        'quantity': (it['quantity'] as num?)?.toDouble() ?? 1.0,
+        'stock_quantity': stock,
+      });
+    }
+
+    setState(() {
+      _slotCarts[_activeSlot] = restoredCart;
+      _slotCustomerIds[_activeSlot] = contactId;
+      _slotDiscounts[_activeSlot] = discount;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('تم تحميل الفاتورة $invoiceNumber للتعديل، اضغط "حاسب" بعد التعديل')),
+    );
+  }
+
+  void _setFixedPriceTier(String tierName, String label) {
+    setState(() {
+      if (_pinnedPriceTier == tierName) {
+        _pinnedPriceTier = null;
+      } else {
+        _pinnedPriceTier = tierName;
+      }
+      _recalculateCartPrices();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _pinnedPriceTier == null
+              ? 'تم إلغاء تثبيت السعر والعودة للتسعير التلقائي'
+              : 'تم $label بنجاح',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCalculatorDialog() async {
+    String display = '0';
+    double? firstOp;
+    String? operatorSymbol;
+    bool resetNext = false;
+
+    String formatCalcNum(double val) {
+      if (val == val.roundToDouble()) return val.toInt().toString();
+      return val.toStringAsFixed(4).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    }
+
+    double compute(double a, double b, String op) {
+      switch (op) {
+        case '+':
+          return a + b;
+        case '-':
+          return a - b;
+        case '×':
+          return a * b;
+        case '÷':
+          return b == 0 ? 0.0 : a / b;
+        default:
+          return b;
       }
     }
 
-    setState(() => _saving = true);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setCalcState) {
+          void onDigit(String d) {
+            setCalcState(() {
+              if (resetNext || display == '0') {
+                display = d == '.' ? '0.' : d;
+                resetNext = false;
+              } else {
+                if (d == '.' && display.contains('.')) return;
+                display += d;
+              }
+            });
+          }
 
-    try {
-      final invNum = await DatabaseHelper.instance.createSaleInvoice(
-        cartItems: _cart,
-        totalAmount: _subTotal,
-        discount: _discount,
-        paymentMethod: _paymentMethod,
-        customerId: _selectedCustomerId,
-      );
-      if (!mounted) return;
-      setState(() {
-        _cart.clear();
-        _discountController.text = '0';
-        _saving = false;
-      });
-      await _loadData();
-      if (!mounted) return;
-      await ThermalPdfService.showInvoiceActionSheet(context, invNum);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('حدث خطأ أثناء حفظ الفاتورة')),
-      );
-    }
-  }
+          void onOp(String op) {
+            setCalcState(() {
+              final current = double.tryParse(display) ?? 0.0;
+              if (firstOp != null && operatorSymbol != null && !resetNext) {
+                firstOp = compute(firstOp!, current, operatorSymbol!);
+                display = formatCalcNum(firstOp!);
+              } else {
+                firstOp = current;
+              }
+              operatorSymbol = op;
+              resetNext = true;
+            });
+          }
 
-  @override
-  Widget build(BuildContext context) {
-    final items = _filteredProducts;
-    final tierLabel = _activePriceTier;
+          void onEquals() {
+            setCalcState(() {
+              if (firstOp != null && operatorSymbol != null) {
+                final second = double.tryParse(display) ?? 0.0;
+                final res = compute(firstOp!, second, operatorSymbol!);
+                display = formatCalcNum(res);
+                firstOp = null;
+                operatorSymbol = null;
+                resetNext = true;
+              }
+            });
+          }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'المبيعات (POS)',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-        backgroundColor: const Color(0xFF1545B5),
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-            child: DropdownButtonFormField<int?>(
-              value: _selectedCustomerId,
-              decoration: InputDecoration(
-                labelText: 'العميل • فئة السعر الحالية: $tierLabel',
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              items: [
-                const DropdownMenuItem<int?>(
-                  value: null,
-                  child: Text('عميل نقدي عام (سعر تجزئة)'),
-                ),
-                ..._customers.map(
-                  (c) => DropdownMenuItem<int?>(
-                    value: c['id'] as int,
+          Widget calcBtn(String label, {Color? bg, Color? fg, VoidCallback? onTap}) {
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: SizedBox(
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: bg ?? const Color(0xFFF1F5F9),
+                      foregroundColor: fg ?? Colors.black87,
+                      padding: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: onTap,
                     child: Text(
-                      '${c['name']} • ${c['price_tier'] ?? 'تجزئة'} (الرصيد: ${c['balance']})',
+                      label,
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
-              ],
-              onChanged: (val) {
-                setState(() {
-                  _selectedCustomerId = val;
-                  _recalculateCartPrices();
-                });
-              },
-            ),
-          ),
-          if (_categories.isNotEmpty)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-              child: Row(
+              ),
+            );
+          }
+
+          return AlertDialog(
+            title: const Text('الحاسبة', style: TextStyle(fontWeight: FontWeight.bold)),
+            content: SizedBox(
+              width: 290,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  ChoiceChip(
-                    label: const Text('الكل'),
-                    selected: _selectedCategoryId == null,
-                    onSelected: (_) => setState(() => _selectedCategoryId = null),
-                  ),
-                  ..._categories.map((cat) {
-                    final int cid = cat['id'] as int;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: Text((cat['name'] ?? '').toString()),
-                        selected: _selectedCategoryId == cid,
-                        onSelected: (_) => setState(() => _selectedCategoryId = cid),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      display,
+                      textAlign: TextAlign.left,
+                      textDirection: TextDirection.ltr,
+                      style: const TextStyle(
+                        color: Color(0xFF4ADE80),
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
                       ),
-                    );
-                  }),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      calcBtn('C', bg: const Color(0xFFFEE2E2), fg: const Color(0xFFDC2626), onTap: () {
+                        setCalcState(() {
+                          display = '0';
+                          firstOp = null;
+                          operatorSymbol = null;
+                          resetNext = false;
+                        });
+                      }),
+                      calcBtn('⌫', onTap: () {
+                        setCalcState(() {
+                          if (display.length <= 1) {
+                            display = '0';
+                          } else {
+                            display = display.substring(0, display.length - 1);
+                          }
+                        });
+                      }),
+                      calcBtn('÷', bg: const Color(0xFFDBEAFE), fg: const Color(0xFF1D4ED8), onTap: () => onOp('÷')),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      calcBtn('7', onTap: () => onDigit('7')),
+                      calcBtn('8', onTap: () => onDigit('8')),
+                      calcBtn('9', onTap: () => onDigit('9')),
+                      calcBtn('×', bg: const Color(0xFFDBEAFE), fg: const Color(0xFF1D4ED8), onTap: () => onOp('×')),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      calcBtn('4', onTap: () => onDigit('4')),
+                      calcBtn('5', onTap: () => onDigit('5')),
+                      calcBtn('6', onTap: () => onDigit('6')),
+                      calcBtn('-', bg: const Color(0xFFDBEAFE), fg: const Color(0xFF1D4ED8), onTap: () => onOp('-')),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      calcBtn('1', onTap: () => onDigit('1')),
+                      calcBtn('2', onTap: () => onDigit('2')),
+                      calcBtn('3', onTap: () => onDigit('3')),
+                      calcBtn('+', bg: const Color(0xFFDBEAFE), fg: const Color(0xFF1D4ED8), onTap: () => onOp('+')),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      calcBtn('0', onTap: () => onDigit('0')),
+                      calcBtn('.', onTap: () => onDigit('.')),
+                      calcBtn('=', bg: const Color(0xFF1545B5), fg: Colors.white, onTap: onEquals),
+                    ],
+                  ),
                 ],
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 2, 12, 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    onChanged: (val) => setState(() => _search = val),
-                    decoration: InputDecoration(
-                      hintText: 'ابحث بالاسم أو الباركود...',
-                      prefixIcon: const Icon(Icons.search),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: display));
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('تم نسخ الناتج ($display) إلى الحافظة')),
+                  );
+                },
+                child: const Text('نسخ الناتج'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('إغلاق'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _inquireCustomerRemainingDialog() async {
+    final currentCust = _selectedCustomer;
+    if (currentCust != null) {
+      final int cid = currentCust['id'] as int;
+      final double bal = (currentCust['balance'] as num?)?.toDouble() ?? 0.0;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('الاستعلام عن الباقي عند العميل', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('اسم العميل: ${currentCust['name']}', style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              if ((currentCust['phone'] ?? '').toString().isNotEmpty)
+                Text('رقم الهاتف: ${currentCust['phone']}'),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFDC2626)),
+                ),
+                child: Text(
+                  'الباقي (المديونية السابقة): ${bal.toStringAsFixed(2)} $_currencySymbol',
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _scanBarcodeForPos,
-                  style: IconButton.styleFrom(backgroundColor: const Color(0xFF1545B5)),
-                  tooltip: 'مسح باركود بالكاميرا',
-                  icon: const Icon(Icons.qr_code_scanner),
-                ),
-              ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                ThermalPdfService.showContactStatementSheet(context, cid);
+              },
+              child: const Text('كشف حساب تفصيلي'),
             ),
-          ),
-          Expanded(
-            flex: 4,
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : items.isEmpty
-                    ? const Center(child: Text('لا توجد أصناف مطابقة'))
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        itemCount: items.length,
-                        itemBuilder: (context, index) {
-                          final pRow = items[index];
-                          final qty = (pRow['stock_quantity'] as num?)?.toDouble() ?? 0.0;
-                          final price = _resolveProductPrice(pRow, tierLabel);
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 6),
-                            child: ListTile(
-                              dense: true,
-                              onTap: () => _addToCart(pRow),
-                              title: Text(
-                                (pRow['name'] ?? '').toString(),
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: Text('المتوفر: $qty • ${pRow['category_name'] ?? 'عام'}'),
-                              trailing: Text(
-                                price.toStringAsFixed(2),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                  color: Color(0xFF1545B5),
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            flex: 5,
-            child: Container(
-              color: Colors.white,
-              padding: const EdgeInsets.all(12),
+    String query = '';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final q = query.trim().toLowerCase();
+          final list = _customers.where((c) {
+            if (q.isEmpty) return true;
+            return (c['name'] ?? '').toString().toLowerCase().contains(q) ||
+                (c['phone'] ?? '').toString().toLowerCase().contains(q);
+          }).toList();
+
+          return AlertDialog(
+            title: const Text('الاستعلام عن الباقي عند العميل', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 360,
               child: Column(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'سلة الفاتورة',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
-                      Text(
-                        'الصافي: ${_netTotal.toStringAsFixed(2)}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          color: Color(0xFF0D7C66),
-                        ),
-                      ),
-                    ],
+                  TextField(
+                    onChanged: (v) => setDialogState(() => query = v),
+                    decoration: const InputDecoration(
+                      hintText: 'ابحث باسم العميل أو الهاتف...',
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
+                    ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Expanded(
-                    child: _cart.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'اضغط على أي صنف بالأعلى أو امسح الباركود بالكاميرا',
-                              style: TextStyle(color: Colors.black54),
-                            ),
-                          )
-                        : ListView.builder(
-                            itemCount: _cart.length,
-                            itemBuilder: (context, index) {
-                              final item = _cart[index];
-                              final qty = (item['quantity'] as num).toDouble();
-                              final price = (item['price'] as num).toDouble();
-                              final lineTotal = qty * price;
-
+                    child: list.isEmpty
+                        ? const Center(child: Text('لا يوجد عملاء مسجلون'))
+                        : ListView.separated(
+                            itemCount: list.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (ctx, idx) {
+                              final c = list[idx];
+                              final int cid = c['id'] as int;
+                              final bal = (c['balance'] as num?)?.toDouble() ?? 0.0;
                               return ListTile(
                                 dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  item['name'].toString(),
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                title: Text((c['name'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                subtitle: Text((c['phone'] ?? '').toString()),
+                                trailing: Text(
+                                  '${bal.toStringAsFixed(2)} $_currencySymbol',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: bal > 0 ? const Color(0xFFDC2626) : const Color(0xFF0D7C66),
+                                  ),
                                 ),
-                                subtitle: Text('${price.toStringAsFixed(2)} × $qty = ${lineTotal.toStringAsFixed(2)}'),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.remove_circle_outline),
-                                      onPressed: () => _changeQty(index, -1),
-                                    ),
-                                    Text('$qty'),
-                                    IconButton(
-                                      icon: const Icon(Icons.add_circle_outline),
-                                      onPressed: () => _changeQty(index, 1),
-                                    ),
-                                  ],
-                                ),
+                                onTap: () {
+                                  Navigator.of(ctx).pop();
+                                  ThermalPdfService.showContactStatementSheet(context, cid);
+                                },
                               );
                             },
                           ),
                   ),
-                  const SizedBox(height: 6),
+                ],
+              ),
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('إغلاق'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _importFromQuotationDialog() async {
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    List<dynamic> quotes = [];
+    try {
+      final decoded = jsonDecode(settings['saved_quotes_json'] ?? '[]');
+      if (decoded is List) quotes = List<dynamic>.from(decoded);
+    } catch (_) {}
+
+    if (!mounted) return;
+    final titleCtrl = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('استيراد البيانات من عرض سعر', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 360,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_cart.isNotEmpty) ...[
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
-                          controller: _discountController,
-                          onChanged: (_) => setState(() {}),
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          controller: titleCtrl,
                           decoration: const InputDecoration(
-                            labelText: 'الخصم',
+                            hintText: 'اسم عرض السعر لحفظ السلة الحالية...',
                             isDense: true,
                             border: OutlineInputBorder(),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _paymentMethod,
-                          decoration: const InputDecoration(
-                            labelText: 'طريقة الدفع',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                          ),
-                          items: const [
-                            DropdownMenuItem(value: 'نقدي', child: Text('نقدي')),
-                            DropdownMenuItem(value: 'آجل', child: Text('آجل')),
-                          ],
-                          onChanged: (val) {
-                            if (val != null) setState(() => _paymentMethod = val);
-                          },
-                        ),
+                      const SizedBox(width: 6),
+                      FilledButton(
+                        onPressed: () async {
+                          final qTitle = titleCtrl.text.trim().isEmpty
+                              ? 'عرض سعر ${quotes.length + 1}'
+                              : titleCtrl.text.trim();
+                          quotes.insert(0, {
+                            'title': qTitle,
+                            'date': DateTime.now().toString().split('.').first,
+                            'customer_id': _selectedCustomerId,
+                            'items': _cart.map((e) => DbRow.from(e)).toList(),
+                          });
+                          await DatabaseHelper.instance.saveSettingsMap({
+                            'saved_quotes_json': jsonEncode(quotes),
+                          });
+                          titleCtrl.clear();
+                          setDialogState(() {});
+                        },
+                        child: const Text('حفظ كعرض'),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 46,
-                    child: FilledButton.icon(
-                      onPressed: _cart.isEmpty || _saving ? null : _checkout,
-                      icon: const Icon(Icons.check_circle_outline),
-                      label: Text(_saving ? 'جاري الحفظ...' : 'إتمام الفاتورة'),
+                  const Divider(height: 18),
+                ],
+                Expanded(
+                  child: quotes.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'لا توجد عروض أسعار محفوظة بعد.\nيمكنك إضافة أصناف للسلة ثم حفظها كعرض سعر لاستيرادها لاحقاً.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.black54, fontSize: 13),
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: quotes.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (ctx, idx) {
+                            final qMap = quotes[idx] as Map;
+                            final qItems = (qMap['items'] as List?) ?? [];
+                            return ListTile(
+                              dense: true,
+                              title: Text(
+                                (qMap['title'] ?? 'عرض سعر').toString(),
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text('${qMap['date'] ?? ''} • الأصناف: ${qItems.length}'),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton(
+                                    onPressed: () {
+                                      final DbRows imported = [];
+                                      for (final raw in qItems) {
+                                        if (raw is Map) {
+                                          imported.add(DbRow.from(raw));
+                                        }
+                                      }
+                                      setState(() {
+                                        _slotCarts[_activeSlot] = imported;
+                                        _slotCustomerIds[_activeSlot] = qMap['customer_id'] as int?;
+                                        _recalculateCartPrices();
+                                      });
+                                      Navigator.of(ctx).pop();
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('تم استيراد بيانات عرض السعر إلى الفاتورة')),
+                                      );
+                                    },
+                                    child: const Text('استيراد'),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                    onPressed: () async {
+                                      quotes.removeAt(idx);
+                                      await DatabaseHelper.instance.saveSettingsMap({
+                                        'saved_quotes_json': jsonEncode(quotes),
+                                      });
+                                      setDialogState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleEmbeddedBarcodeScanner() async {
+    if (_embeddedScannerActive) {
+      await _embeddedScannerCtrl?.dispose();
+      _embeddedScannerCtrl = null;
+      if (!mounted) return;
+      setState(() => _embeddedScannerActive = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تحويل قارئ الباركود إلى: خارج الشاشة')),
+      );
+      return;
+    }
+
+    final granted = await AppPermissionsService.ensureCameraPermission(openSettingsIfDenied: false);
+    if (!mounted) return;
+    if (!granted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يرجى منح إذن الكاميرا لتشغيل قارئ الباركود المدمج')),
+      );
+      return;
+    }
+
+    _embeddedScannerCtrl = MobileScannerController(
+      detectionSpeed: DetectionSpeed.normal,
+      facing: CameraFacing.back,
+    );
+    setState(() => _embeddedScannerActive = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم تفعيل قارئ الباركود: متضمن داخل الشاشة')),
+    );
+  }
+
+  void _onEmbeddedBarcodeDetected(BarcodeCapture capture) {
+    final now = DateTime.now();
+    for (final b in capture.barcodes) {
+      final raw = b.rawValue?.trim() ?? '';
+      if (raw.isEmpty) continue;
+      if (raw == _lastEmbeddedCode && now.difference(_lastEmbeddedScanAt).inMilliseconds < 1600) {
+        return;
+      }
+      _lastEmbeddedCode = raw;
+      _lastEmbeddedScanAt = now;
+
+      final matches = _products.where(
+        (item) => (item['barcode'] ?? '').toString().trim() == raw,
+      ).toList();
+
+      if (matches.isNotEmpty) {
+        _addToCart(matches.first);
+      } else {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(milliseconds: 900),
+            content: Text('باركود غير مسجل: $raw'),
+          ),
+        );
+      }
+      break;
+    }
+  }
+
+  Future<void> _quickAddNewProductDialog() async {
+    final nameCtrl = TextEditingController();
+    final barcodeCtrl = TextEditingController();
+    final purchaseCtrl = TextEditingController(text: '0');
+    final saleCtrl = TextEditingController();
+    final wholesaleCtrl = TextEditingController(text: '0');
+    final specialCtrl = TextEditingController(text: '0');
+    final qtyCtrl = TextEditingController(text: '10');
+    int? chosenCatId = _categories.isNotEmpty ? _categories.first['id'] as int : null;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('إضافة منتج جديد', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'اسم المنتج *',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: barcodeCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'الباركود',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'مسح بالكاميرا',
+                      icon: const Icon(Icons.qr_code_scanner),
+                      onPressed: () async {
+                        final scanned = await Navigator.of(ctx).push<String>(
+                          MaterialPageRoute(
+                            builder: (_) => const BarcodeScannerScreen(title: 'مسح باركود المنتج'),
+                          ),
+                        );
+                        if (scanned != null && scanned.isNotEmpty) {
+                          barcodeCtrl.text = scanned;
+                        }
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'توليد تلقائي',
+                      icon: const Icon(Icons.qr_code_2),
+                      onPressed: () {
+                        barcodeCtrl.text = '200${DateTime.now().millisecondsSinceEpoch % 1000000000}';
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: purchaseCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'سعر الشراء',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: saleCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'سعر البيع 1 *',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: wholesaleCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'سعر البيع 2 (جملة)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: specialCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'سعر البيع 3 (خاص)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: qtyCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'الكمية الافتتاحية',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                final sPrice = double.tryParse(saleCtrl.text.trim()) ?? 0.0;
+                if (name.isEmpty || sPrice <= 0) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('يرجى إدخال اسم المنتج وسعر البيع 1')),
+                  );
+                  return;
+                }
+                final bCode = barcodeCtrl.text.trim();
+                await DatabaseHelper.instance.insertProduct({
+                  'name': name,
+                  'category_id': chosenCatId,
+                  'barcode': bCode.isEmpty ? null : bCode,
+                  'purchase_price': double.tryParse(purchaseCtrl.text.trim()) ?? 0.0,
+                  'sale_price': sPrice,
+                  'wholesale_price': double.tryParse(wholesaleCtrl.text.trim()) ?? 0.0,
+                  'special_price': double.tryParse(specialCtrl.text.trim()) ?? 0.0,
+                  'stock_quantity': double.tryParse(qtyCtrl.text.trim()) ?? 0.0,
+                  'min_stock': 2.0,
+                  'is_active': 1,
+                });
+                if (ctx.mounted) Navigator.of(ctx).pop(true);
+              },
+              child: const Text('حفظ المنتج'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await _loadData();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تمت إضافة المنتج الجديد إلى المخزون بنجاح')),
+      );
+    }
+  }
+
+  Future<void> _openQuickProductsGridSheet() async {
+    int? chosenCatId;
+    String sheetSearch = '';
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final q = sheetSearch.trim().toLowerCase();
+          final list = _products.where((p) {
+            if (chosenCatId != null && p['category_id'] != chosenCatId) return false;
+            if (q.isEmpty) return true;
+            return (p['name'] ?? '').toString().toLowerCase().contains(q) ||
+                (p['barcode'] ?? '').toString().toLowerCase().contains(q);
+          }).toList();
+
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.78,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'اختيار الأصناف السريع',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                        ),
+                      ],
+                    ),
+                    TextField(
+                      onChanged: (v) => setSheetState(() => sheetSearch = v),
+                      decoration: InputDecoration(
+                        hintText: 'تصفية الأصناف...',
+                        prefixIcon: const Icon(Icons.search),
+                        isDense: true,
+                        filled: true,
+                        fillColor: const Color(0xFFF1F5F9),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    if (_categories.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            ChoiceChip(
+                              label: const Text('الكل'),
+                              selected: chosenCatId == null,
+                              onSelected: (_) => setSheetState(() => chosenCatId = null),
+                            ),
+                            ..._categories.map((cat) {
+                              final int cid = cat['id'] as int;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: ChoiceChip(
+                                  label: Text((cat['name'] ?? '').toString()),
+                                  selected: chosenCatId == cid,
+                                  onSelected: (_) => setSheetState(() => chosenCatId = cid),
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: list.isEmpty
+                          ? const Center(child: Text('لا توجد أصناف متاحة'))
+                          : GridView.builder(
+                              itemCount: list.length,
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                crossAxisSpacing: 8,
+                                mainAxisSpacing: 8,
+                                childAspectRatio: 1.75,
+                              ),
+                              itemBuilder: (ctx, idx) {
+                                final prod = list[idx];
+                                final price = _resolveProductPrice(prod, _activePriceTier);
+                                final stock = (prod['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(12),
+                                  onTap: () {
+                                    _addToCart(prod);
+                                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        duration: const Duration(milliseconds: 700),
+                                        content: Text('تمت إضافة: ${prod['name']}'),
+                                      ),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: Colors.grey.shade300),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(
+                                          (prod['name'] ?? '').toString(),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              '${price.toStringAsFixed(2)} $_currencySymbol',
+                                              style: const TextStyle(
+                                                color: Color(0xFF1545B5),
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12.5,
+                                              ),
+                                            ),
+                                            Text(
+                                              'مخزون: $stock',
+                                              style: const TextStyle(fontSize: 11, color: Colors.black54),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _editCartRowDialog(int index) async {
+    final item = _cart[index];
+    final double stock = (item['stock_quantity'] as num).toDouble();
+    final qtyCtrl = TextEditingController(text: item['quantity'].toString());
+    final priceCtrl = TextEditingController(text: item['price'].toString());
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          item['name'].toString(),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: qtyCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: 'الكمية (المتوفر: $stock)',
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: priceCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'سعر الوحدة',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() => _cart.removeAt(index));
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('حذف الصنف', style: TextStyle(color: Color(0xFFDC2626))),
+          ),
+          FilledButton(
+            onPressed: () {
+              final nextQty = double.tryParse(qtyCtrl.text.trim()) ?? 0.0;
+              final nextPrice = double.tryParse(priceCtrl.text.trim()) ?? 0.0;
+              if (nextQty <= 0) {
+                setState(() => _cart.removeAt(index));
+                Navigator.of(ctx).pop();
+                return;
+              }
+              if (stock > 0 && nextQty > stock) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text('الحد الأقصى المتوفر هو $stock')),
+                );
+                return;
+              }
+              setState(() {
+                _cart[index]['quantity'] = nextQty;
+                _cart[index]['price'] = nextPrice < 0 ? 0.0 : nextPrice;
+              });
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('تحديث'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openSettleCheckoutDialog() async {
+    if (_cart.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أضف أصنافاً إلى الفاتورة أولاً قبل التحصيل')),
+      );
+      return;
+    }
+
+    String payMethod = 'نقدي';
+    final discountCtrl = TextEditingController(text: _discount.toStringAsFixed(0));
+    final paidCtrl = TextEditingController(text: _grandTotalWithTax.toStringAsFixed(2));
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final disc = double.tryParse(discountCtrl.text.trim()) ?? 0.0;
+          final afterDisc = (_subTotal - disc) < 0 ? 0.0 : (_subTotal - disc);
+          final taxVal = _taxPercent > 0 ? afterDisc * (_taxPercent / 100.0) : 0.0;
+          final netTotal = afterDisc + taxVal;
+          final paidVal = double.tryParse(paidCtrl.text.trim()) ?? 0.0;
+          final changeVal = paidVal - netTotal;
+
+          return AlertDialog(
+            title: const Text(
+              'تحصيل وحفظ الفاتورة',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFECFCCB),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF84CC16)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('الصافي المطلوب:', style: TextStyle(fontWeight: FontWeight.bold)),
+                        Text(
+                          '${netTotal.toStringAsFixed(2)} $_currencySymbol',
+                          style: const TextStyle(
+                            color: Color(0xFFDC2626),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'نقدي', label: Text('نقدي'), icon: Icon(Icons.payments)),
+                      ButtonSegment(value: 'آجل', label: Text('آجل'), icon: Icon(Icons.credit_score)),
+                    ],
+                    selected: {payMethod},
+                    onSelectionChanged: (sel) {
+                      setDialogState(() {
+                        payMethod = sel.first;
+                        if (payMethod == 'نقدي') {
+                          paidCtrl.text = netTotal.toStringAsFixed(2);
+                        } else {
+                          paidCtrl.text = '0';
+                        }
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: discountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'الخصم',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  if (payMethod == 'نقدي') ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: paidCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: (_) => setDialogState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'المبلغ المستلم من العميل',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      changeVal >= 0
+                          ? 'المتبقي للعميل: ${changeVal.toStringAsFixed(2)} $_currencySymbol'
+                          : 'المبلغ ناقص بمقدار: ${changeVal.abs().toStringAsFixed(2)} $_currencySymbol',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: changeVal >= 0 ? const Color(0xFF0D7C66) : const Color(0xFFDC2626),
+                      ),
+                    ),
+                  ],
                 ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: _saving ? null : () => Navigator.of(ctx).pop(),
+                child: const Text('إلغاء'),
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1545B5)),
+                onPressed: _saving
+                    ? null
+                    : () async {
+                        if (payMethod == 'آجل') {
+                          if (_selectedCustomerId == null) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              const SnackBar(content: Text('يرجى اختيار عميل مسجل عند البيع الآجل')),
+                            );
+                            return;
+                          }
+                          final cust = _selectedCustomer;
+                          final limit = (cust?['credit_limit'] as num?)?.toDouble() ?? 0.0;
+                          final bal = (cust?['balance'] as num?)?.toDouble() ?? 0.0;
+                          if (limit > 0 && (bal + netTotal) > limit) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              SnackBar(content: Text('الفاتورة تتجاوز سقف الآجل للعميل ($limit)')),
+                            );
+                            return;
+                          }
+                        }
+
+                        setState(() {
+                          _saving = true;
+                          _slotDiscounts[_activeSlot] = disc;
+                        });
+
+                        try {
+                          final invNum = await DatabaseHelper.instance.createSaleInvoice(
+                            cartItems: _cart,
+                            totalAmount: _subTotal + taxVal,
+                            discount: disc,
+                            paymentMethod: payMethod,
+                            customerId: _selectedCustomerId,
+                          );
+                          if (!mounted) return;
+                          if (ctx.mounted) Navigator.of(ctx).pop();
+                          setState(() {
+                            _slotCarts[_activeSlot].clear();
+                            _slotDiscounts[_activeSlot] = 0.0;
+                            _saving = false;
+                          });
+                          await _loadData();
+                          if (!mounted) return;
+                          await ThermalPdfService.showInvoiceActionSheet(context, invNum);
+                        } catch (_) {
+                          if (!mounted) return;
+                          setState(() => _saving = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('حدث خطأ أثناء حفظ الفاتورة')),
+                          );
+                        }
+                      },
+                icon: const Icon(Icons.check_circle),
+                label: Text(_saving ? 'جاري الحفظ...' : 'حفظ وطباعة'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSlotCell(int index) {
+    final bool isActive = _activeSlot == index;
+    final bool hasItems = _slotCarts[index].isNotEmpty;
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _activeSlot = index;
+          if (_showCustomerSearchBar) {
+            _customerSearchController.text = _selectedCustomer?['name']?.toString() ?? '';
+            _customerSearchQuery = '';
+          }
+          _recalculateCartPrices();
+        });
+      },
+      child: Container(
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isActive
+              ? const Color(0xFF4ADE80)
+              : (hasItems ? const Color(0xFFFEF08A) : Colors.white),
+          border: Border.all(color: Colors.black87, width: 0.9),
+        ),
+        child: Text(
+          '${index + 1}',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+            color: isActive ? Colors.black : Colors.black87,
+          ),
+        ),
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _buildMenuRow(String value, String label, {bool checked = false}) {
+    return PopupMenuItem<String>(
+      value: value,
+      height: 46,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          if (checked) ...[
+            const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Text(
+              label,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: checked ? FontWeight.bold : FontWeight.w500,
+                color: checked ? const Color(0xFF0F2C7E) : const Color(0xFF1F2937),
               ),
             ),
           ),
@@ -7923,8 +9198,652 @@ class _PosScreenState extends State<PosScreen> {
       ),
     );
   }
-}
 
+  @override
+  Widget build(BuildContext context) {
+    final matches = _searchMatches;
+    final custMatches = _customerSearchMatches;
+    final custName = _selectedCustomer?['name']?.toString();
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0.6,
+        surfaceTintColor: Colors.white,
+        automaticallyImplyLeading: false,
+        titleSpacing: 6,
+        title: Row(
+          children: [
+            PopupMenuButton<String>(
+              color: Colors.white,
+              surfaceTintColor: Colors.white,
+              elevation: 8,
+              offset: const Offset(0, 46),
+              constraints: const BoxConstraints(minWidth: 275, maxWidth: 320),
+              icon: const Icon(Icons.menu, color: Colors.black87, size: 28),
+              onSelected: (val) async {
+                switch (val) {
+                  case 'reprint':
+                    await _reprintLastInvoice();
+                    break;
+                  case 'edit_invoice':
+                    await _editPreviousSaleInvoiceDialog();
+                    break;
+                  case 'price_1':
+                    _setFixedPriceTier('تجزئة', 'تثبيت سعر البيع 1');
+                    break;
+                  case 'price_2':
+                    _setFixedPriceTier('جملة', 'تثبيت سعر البيع 2');
+                    break;
+                  case 'price_3':
+                    _setFixedPriceTier('خاص', 'تثبيت سعر البيع 3');
+                    break;
+                  case 'calculator':
+                    await _openCalculatorDialog();
+                    break;
+                  case 'customer_balance':
+                    await _inquireCustomerRemainingDialog();
+                    break;
+                  case 'import_quote':
+                    await _importFromQuotationDialog();
+                    break;
+                  case 'barcode_mode':
+                    await _toggleEmbeddedBarcodeScanner();
+                    break;
+                  case 'add_product':
+                    await _quickAddNewProductDialog();
+                    break;
+                  case 'view_invoices':
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ReportsScreen()),
+                    );
+                    _loadData();
+                    break;
+                  case 'clear_cart':
+                    setState(() {
+                      _slotCarts[_activeSlot].clear();
+                      _slotDiscounts[_activeSlot] = 0.0;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('تم مسح المنتجات من القائمة')),
+                    );
+                    break;
+                }
+              },
+              itemBuilder: (_) => [
+                _buildMenuRow('reprint', 'اعاده طباعه الفاتورة'),
+                _buildMenuRow('edit_invoice', 'تعديل فاتورة البيع'),
+                _buildMenuRow('price_1', 'تثبيت سعر البيع1', checked: _pinnedPriceTier == 'تجزئة'),
+                _buildMenuRow('price_2', 'تثبيت سعر البيع2', checked: _pinnedPriceTier == 'جملة'),
+                _buildMenuRow('price_3', 'تثبيت سعر البيع3', checked: _pinnedPriceTier == 'خاص'),
+                _buildMenuRow('calculator', 'الحاسبه'),
+                _buildMenuRow('customer_balance', 'الاستعلام عن الباقي عند العميل'),
+                _buildMenuRow('import_quote', 'استيراد البيانات من عرض سعر'),
+                _buildMenuRow(
+                  'barcode_mode',
+                  'قارىء الباركود متضمن/خارج الشاشة',
+                  checked: _embeddedScannerActive,
+                ),
+                _buildMenuRow('add_product', 'اضافه منتج جديد'),
+                _buildMenuRow('view_invoices', 'عرض الفواتير'),
+                _buildMenuRow('clear_cart', 'مسح المنتجات من القائمه'),
+              ],
+            ),
+            Expanded(
+              child: Text(
+                _appBarPriceTierTitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 19,
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.arrow_forward_ios, color: Color(0xFF0F2C7E), size: 22),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 54),
+        child: FloatingActionButton(
+          mini: false,
+          backgroundColor: const Color(0xFFE5E7EB),
+          foregroundColor: Colors.black87,
+          elevation: 3,
+          shape: const CircleBorder(),
+          onPressed: _openQuickProductsGridSheet,
+          child: const Icon(Icons.apps_rounded, size: 28),
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      body: Column(
+        children: [
+          if (_embeddedScannerActive && _embeddedScannerCtrl != null)
+            Container(
+              height: 125,
+              width: double.infinity,
+              color: Colors.black,
+              child: Stack(
+                children: [
+                  MobileScanner(
+                    controller: _embeddedScannerCtrl!,
+                    onDetect: _onEmbeddedBarcodeDetected,
+                  ),
+                  Center(
+                    child: Container(
+                      width: 220,
+                      height: 75,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.greenAccent, width: 2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    left: 4,
+                    child: IconButton(
+                      style: IconButton.styleFrom(backgroundColor: Colors.black54),
+                      icon: const Icon(Icons.close, color: Colors.white, size: 18),
+                      onPressed: _toggleEmbeddedBarcodeScanner,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(
+                top: BorderSide(color: Colors.grey.shade300),
+                bottom: BorderSide(color: Colors.grey.shade300),
+              ),
+            ),
+            child: Row(
+              children: [
+                InkWell(
+                  onTap: _scanBarcodeForPos,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 44,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.black54, width: 1.2),
+                    ),
+                    child: const Icon(Icons.qr_code_scanner_rounded, color: Colors.black87, size: 26),
+                  ),
+                ),
+                const SizedBox(width: 5),
+                InkWell(
+                  onTap: _toggleCustomerSearchBar,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 42,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFACC15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: _showCustomerSearchBar
+                          ? Border.all(color: const Color(0xFF16A34A), width: 1.6)
+                          : null,
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        const Icon(Icons.contact_phone_rounded, color: Color(0xFF16A34A), size: 25),
+                        if (_selectedCustomerId != null)
+                          const Positioned(
+                            top: 3,
+                            left: 3,
+                            child: CircleAvatar(radius: 4, backgroundColor: Color(0xFF0F2C7E)),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: SizedBox(
+                    height: 40,
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocus,
+                      onChanged: (v) => setState(() => _search = v),
+                      onSubmitted: _onSearchSubmitted,
+                      style: const TextStyle(fontSize: 13.5),
+                      decoration: InputDecoration(
+                        hintText: custName != null
+                            ? 'العميل: $custName'
+                            : 'ابحث عن منتج أو استخدم الكاميرا',
+                        hintStyle: TextStyle(
+                          color: custName != null ? const Color(0xFF0F2C7E) : Colors.grey.shade500,
+                          fontSize: 12.5,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                        isDense: true,
+                        suffixIcon: _search.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.close, size: 16),
+                                onPressed: () {
+                                  setState(() {
+                                    _search = '';
+                                    _searchController.clear();
+                                  });
+                                },
+                              )
+                            : null,
+                        enabledBorder: const UnderlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFEC4899), width: 1.6),
+                        ),
+                        focusedBorder: const UnderlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF1545B5), width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 44,
+                  height: 40,
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(child: _buildSlotCell(0)),
+                            Expanded(child: _buildSlotCell(1)),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(child: _buildSlotCell(2)),
+                            Expanded(child: _buildSlotCell(3)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                InkWell(
+                  onTap: _openSettleCheckoutDialog,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    height: 40,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE5E7EB),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey.shade400),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'حاسب',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        SizedBox(width: 4),
+                        Icon(Icons.monetization_on_rounded, color: Color(0xFFEAB308), size: 22),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          if (_showCustomerSearchBar) ...[
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              child: Container(
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade400, width: 1.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _customerSearchController,
+                        focusNode: _customerSearchFocus,
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+                        onChanged: (v) {
+                          setState(() {
+                            _customerSearchQuery = v;
+                          });
+                        },
+                        onSubmitted: (v) async {
+                          await _createAndSelectTypedCustomer(v);
+                        },
+                        decoration: InputDecoration(
+                          hintText: 'ابحث عن اسم العميل أو اكتب اسم العميل',
+                          hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 14),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    if (_customerSearchController.text.trim().isNotEmpty)
+                      IconButton(
+                        tooltip: 'اعتماد الاسم المدخل',
+                        icon: const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 22),
+                        onPressed: () async {
+                          await _createAndSelectTypedCustomer(_customerSearchController.text);
+                        },
+                      ),
+                    IconButton(
+                      tooltip: _selectedCustomerId != null || _customerSearchController.text.isNotEmpty
+                          ? 'مسح العميل'
+                          : 'إغلاق',
+                      icon: const Icon(Icons.close, color: Colors.black54, size: 20),
+                      onPressed: () {
+                        setState(() {
+                          if (_customerSearchController.text.isNotEmpty || _selectedCustomerId != null) {
+                            _customerSearchController.clear();
+                            _customerSearchQuery = '';
+                            _slotCustomerIds[_activeSlot] = null;
+                            _recalculateCartPrices();
+                          } else {
+                            _showCustomerSearchBar = false;
+                          }
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            Container(
+              constraints: const BoxConstraints(maxHeight: 200),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                border: Border(
+                  top: BorderSide(color: Colors.grey.shade300),
+                  bottom: BorderSide(color: Colors.grey.shade400, width: 1.2),
+                ),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+                ],
+              ),
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  if (_customerSearchQuery.trim().isNotEmpty)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.person_add_alt_1, color: Color(0xFF16A34A)),
+                      title: Text(
+                        'اعتماد / إضافة العميل: "${_customerSearchQuery.trim()}"',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF16A34A),
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      onTap: () => _createAndSelectTypedCustomer(_customerSearchQuery),
+                    ),
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.person_outline, color: Color(0xFF1545B5)),
+                    title: const Text(
+                      'عميل نقدي عام',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    trailing: _selectedCustomerId == null
+                        ? const Icon(Icons.check, color: Color(0xFF16A34A), size: 18)
+                        : null,
+                    onTap: () {
+                      setState(() {
+                        _slotCustomerIds[_activeSlot] = null;
+                        _customerSearchController.clear();
+                        _customerSearchQuery = '';
+                        _showCustomerSearchBar = false;
+                        _recalculateCartPrices();
+                      });
+                    },
+                  ),
+                  ...custMatches.map((c) {
+                    final int cid = c['id'] as int;
+                    final bal = (c['balance'] as num?)?.toDouble() ?? 0.0;
+                    final tier = (c['price_tier'] ?? 'تجزئة').toString();
+                    return ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.person, color: Color(0xFFD97706)),
+                      title: Text(
+                        (c['name'] ?? '').toString(),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                      ),
+                      subtitle: Text('فئة: $tier • الباقي: ${bal.toStringAsFixed(2)} $_currencySymbol'),
+                      trailing: _selectedCustomerId == cid
+                          ? const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18)
+                          : null,
+                      onTap: () => _selectExistingCustomer(c),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ],
+
+          if (matches.isNotEmpty)
+            Container(
+              constraints: const BoxConstraints(maxHeight: 210),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                border: Border(bottom: BorderSide(color: Colors.grey.shade300, width: 1.2)),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+                ],
+              ),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: matches.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (ctx, idx) {
+                  final prod = matches[idx];
+                  final price = _resolveProductPrice(prod, _activePriceTier);
+                  final stock = (prod['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+                  return ListTile(
+                    dense: true,
+                    onTap: () => _addToCart(prod, clearSearch: true),
+                    title: Text(
+                      (prod['name'] ?? '').toString(),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    subtitle: Text('المتوفر: $stock'),
+                    trailing: Text(
+                      '${price.toStringAsFixed(2)} $_currencySymbol',
+                      style: const TextStyle(
+                        color: Color(0xFF1545B5),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+
+          Container(
+            color: const Color(0xFFE5E7EB),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: const Row(
+              children: [
+                Expanded(
+                  flex: 4,
+                  child: Text(
+                    'المنتج',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.black87),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    'السعر',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.black87),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    'الكمية',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.black87),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    'الإجمالي',
+                    textAlign: TextAlign.left,
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.black87),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _cart.isEmpty
+                    ? const SizedBox.expand()
+                    : ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 72),
+                        itemCount: _cart.length,
+                        separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade300),
+                        itemBuilder: (context, index) {
+                          final item = _cart[index];
+                          final qty = (item['quantity'] as num).toDouble();
+                          final price = (item['price'] as num).toDouble();
+                          final lineTotal = qty * price;
+
+                          return InkWell(
+                            onTap: () => _editCartRowDialog(index),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    flex: 4,
+                                    child: Text(
+                                      item['name'].toString(),
+                                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                      price.toStringAsFixed(2),
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(fontSize: 13),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                      qty.toString(),
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    flex: 2,
+                                    child: Text(
+                                      lineTotal.toStringAsFixed(2),
+                                      textAlign: TextAlign.left,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13.5,
+                                        color: Color(0xFF0F2C7E),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              border: Border(top: BorderSide(color: Colors.grey.shade300, width: 1.2)),
+            ),
+            child: Row(
+              children: [
+                const Text(
+                  'الإجمالي+TAX',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.black87),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    height: 38,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE6F7D4),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.grey.shade400),
+                    ),
+                    child: Text(
+                      _grandTotalWithTax.toStringAsFixed(2),
+                      style: const TextStyle(
+                        color: Color(0xFFDC2626),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 17,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '$_currencySymbol ع.ق',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.black87),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _customerPrevBalance.toStringAsFixed(1),
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key});
 
