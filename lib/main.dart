@@ -171,8 +171,6 @@ class _MarqueeBannerState extends State<MarqueeBanner> {
 class DeviceLicenseService {
   static const String appSecretSalt = 'NEBRAS_SOFT_POS_2026_SECRET_KEY_#967';
   static const String developerWhatsappUrl = 'https://wa.me/967735114406';
-
-  // رابط ملف سحب التراخيص على GitHub (عدّل اسم المستودع إذا اخترت اسماً آخر)
   static const String revocationListUrl =
       'https://raw.githubusercontent.com/qpkdj/nebras-license-control/main/revoked.json';
 
@@ -237,7 +235,6 @@ class DeviceLicenseService {
     return 'NSACT-${hex.substring(0, 5)}-${hex.substring(5, 10)}-$cleanExp-${hex.substring(10, 14)}';
   }
 
-  /// فحص القائمة السوداء على GitHub عند توفر الإنترنت
   static Future<bool> _checkRemoteRevocation({
     required String fingerprint,
     required String phone,
@@ -273,7 +270,6 @@ class DeviceLicenseService {
       final isPhoneRevoked = revPhones.any((e) => normalizePhone(e.toString()) == cleanPhone);
 
       if (isFpRevoked || isSerRevoked || isPhoneRevoked) {
-        // حفظ السحب محلياً ومسح السيريال حتى يبقى مقفولاً بدون إنترنت
         await DatabaseHelper.instance.saveSettingsMap({
           'licensed_serial': '',
           'licensed_revoked': '1',
@@ -283,7 +279,7 @@ class DeviceLicenseService {
       }
       return false;
     } catch (_) {
-      return false; // في حال عدم وجود إنترنت يستمر العمل بشكل طبيعي
+      return false;
     }
   }
 
@@ -327,7 +323,6 @@ class DeviceLicenseService {
       }
     } catch (_) {}
 
-    // فحص سحب الترخيص عن بُعد عند توفر الإنترنت
     final revoked = await _checkRemoteRevocation(
       fingerprint: currentFp,
       phone: savedPhone,
@@ -376,7 +371,6 @@ class DeviceLicenseService {
 
     final currentFp = await getOrCreateDeviceFingerprint();
 
-    // منع إعادة التفعيل بنفس البيانات إذا كانت في القائمة السوداء
     final isRevoked = await _checkRemoteRevocation(
       fingerprint: currentFp,
       phone: cleanPhone,
@@ -445,7 +439,6 @@ class DeviceLicenseService {
   }
 }
 
-
 class ActivationGateScreen extends StatefulWidget {
   final Widget childWhenActivated;
 
@@ -469,6 +462,7 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
   bool _activated = false;
   bool _submitting = false;
   String? _errorText;
+  String? _revokedMessage;
 
   @override
   void initState() {
@@ -513,9 +507,17 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
       _phoneCtrl.text = rest;
     }
 
+    final bool isRevoked = (settings['licensed_revoked'] ?? '0') == '1';
+    final String revMsg = (settings['licensed_revoked_msg'] ?? '').trim();
+
     setState(() {
       _fingerprint = fp;
       _activated = isAct;
+      _revokedMessage = isRevoked
+          ? (revMsg.isNotEmpty
+              ? revMsg
+              : 'تم إيقاف وسحب ترخيص التطبيق من قبل المطور لعدم إتمام السداد. يرجى التواصل مع نبراس SofT.')
+          : null;
       _checkingInitial = false;
     });
   }
@@ -720,6 +722,48 @@ class _ActivationGateScreenState extends State<ActivationGateScreen> {
               text:
                   'مرحبا بك عزيزي المستخدم في {{ نظام نبراس - SofT المحاسبي}} ، الرجاء ملأ البيانات المطلوب منك ادخالها ، ومن ثم إرسالها لنا واتساب لنقم بإرسال مفتاح التنشيط لك  ، والإستمتاع بالنظام بكامل الصلاحية',
             ),
+            if (_revokedMessage != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFDC2626), width: 1.5),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.block, color: Color(0xFFDC2626), size: 26),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'تنبيه: تم إيقاف الترخيص',
+                            style: TextStyle(
+                              color: Color(0xFF991B1B),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14.5,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _revokedMessage!,
+                            style: const TextStyle(
+                              color: Color(0xFFDC2626),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Card(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(
@@ -1276,6 +1320,8 @@ class DatabaseHelper {
     await db.insert('settings', {'key': 'licensed_phone', 'value': ''});
     await db.insert('settings', {'key': 'licensed_fingerprint', 'value': ''});
     await db.insert('settings', {'key': 'licensed_serial', 'value': ''});
+    await db.insert('settings', {'key': 'licensed_revoked', 'value': '0'});
+    await db.insert('settings', {'key': 'licensed_revoked_msg', 'value': ''});
     await db.insert('settings', {'key': 'used_serials_json', 'value': '{}'});
   }
 
@@ -1374,6 +1420,8 @@ class DatabaseHelper {
       'licensed_phone': '',
       'licensed_fingerprint': '',
       'licensed_serial': '',
+      'licensed_revoked': '0',
+      'licensed_revoked_msg': '',
       'used_serials_json': '{}',
       'printer_a4_footer': '',
       'printer_text_height': '10',
@@ -2140,7 +2188,6 @@ class DatabaseHelper {
     };
   }
 }
-
 class BarcodeScannerScreen extends StatefulWidget {
   final String title;
 
@@ -2405,6 +2452,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen>
     );
   }
 }
+
 class ThermalPdfService {
   static String generateUniqueBarcode(int productId) {
     final suffix = DateTime.now().millisecondsSinceEpoch % 1000000;
@@ -3540,7 +3588,6 @@ class ThermalPdfService {
     );
   }
 }
-
 class NebrasPosApp extends StatelessWidget {
   const NebrasPosApp({super.key});
 
@@ -3564,8 +3611,120 @@ class NebrasPosApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: const Color(0xFFF4F6FA),
       ),
-      home: const ActivationGateScreen(
-        childWhenActivated: DashboardScreen(),
+      home: const WelcomeSplashScreen(),
+    );
+  }
+}
+
+class WelcomeSplashScreen extends StatefulWidget {
+  const WelcomeSplashScreen({super.key});
+
+  @override
+  State<WelcomeSplashScreen> createState() => _WelcomeSplashScreenState();
+}
+
+class _WelcomeSplashScreenState extends State<WelcomeSplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animCtrl;
+  late final Animation<double> _fadeAnim;
+  late final Animation<double> _scaleAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _animCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeIn);
+    _scaleAnim = Tween<double>(begin: 0.85, end: 1.0).animate(
+      CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutBack),
+    );
+    _animCtrl.forward();
+
+    Future.delayed(const Duration(milliseconds: 2400), () {
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => const ActivationGateScreen(
+            childWhenActivated: DashboardScreen(),
+          ),
+        ),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _animCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0A1D56), Color(0xFF0F2C7E), Color(0xFF1E56D9)],
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
+          ),
+        ),
+        child: FadeTransition(
+          opacity: _fadeAnim,
+          child: ScaleTransition(
+            scale: _scaleAnim,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 112,
+                  height: 112,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(24),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white38, width: 2),
+                  ),
+                  child: const Icon(
+                    Icons.point_of_sale_rounded,
+                    size: 58,
+                    color: Color(0xFFFEF08A),
+                  ),
+                ),
+                const SizedBox(height: 22),
+                const Text(
+                  'نظام نبراس - SofT المحاسبي',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Nebras SofT Pos',
+                  style: TextStyle(
+                    color: Color(0xFFBFDBFE),
+                    fontSize: 15,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 36),
+                const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.8,
+                    color: Color(0xFFFEF08A),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -3593,25 +3752,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   static const String _youtubeUrl = 'https://youtube.com/@nebras-soft?si=KALKhHKx4ya-97xJ';
   static const String _githubUrl = 'https://github.com/qpkdj';
 
-  int _productsCount = 0;
   String _shopName = 'نبراس SofT لنقاط البيع';
-  String _currencySymbol = 'ر.ي';
   String _printerPaper = '80mm';
   String _desktopSyncHost = '';
   String _adminPin = '';
   String _receiptFooter = 'شكراً لتعاملكم معنا • Nebras SofT Pos';
   String _deviceId = '';
-  bool _dbReady = false;
   bool _updateCheckDone = false;
 
   static const List<_ModuleItem> _modules = [
-    _ModuleItem('نقطة البيع (POS)', Icons.point_of_sale, Color(0xFF1545B5)),
-    _ModuleItem('إدارة الأصناف', Icons.inventory_2, Color(0xFF0D7C66)),
-    _ModuleItem('فواتير المشتريات', Icons.shopping_cart, Color(0xFFD97706)),
-    _ModuleItem('العملاء والموردين', Icons.people, Color(0xFF7C3AED)),
-    _ModuleItem('حركات اليومية والصندوق', Icons.account_balance_wallet, Color(0xFF0F766E)),
-    _ModuleItem('التقارير والأرباح', Icons.bar_chart, Color(0xFFDC2626)),
-    _ModuleItem('النسخ الاحتياطي', Icons.settings_backup_restore, Color(0xFF334155)),
+    _ModuleItem('المبيعات', Icons.point_of_sale_rounded, Color(0xFF1545B5)),
+    _ModuleItem('المشتريات', Icons.shopping_cart_checkout_rounded, Color(0xFFD97706)),
+    _ModuleItem('العملاء', Icons.person_rounded, Color(0xFF0D7C66)),
+    _ModuleItem('الموردين', Icons.local_shipping_rounded, Color(0xFF7C3AED)),
+    _ModuleItem('الصندوق', Icons.account_balance_wallet_rounded, Color(0xFF0F766E)),
+    _ModuleItem('المصروفات', Icons.receipt_long_rounded, Color(0xFFDC2626)),
+    _ModuleItem('المخزون', Icons.inventory_2_rounded, Color(0xFFB45309)),
+    _ModuleItem('الاستعلامات', Icons.bar_chart_rounded, Color(0xFF0284C7)),
   ];
 
   @override
@@ -3623,31 +3780,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refreshStats() async {
     try {
-      final products = await DatabaseHelper.instance.queryAllProducts();
       final settings = await DatabaseHelper.instance.getSettingsMap();
       if (!mounted) return;
       setState(() {
-        _productsCount = products.length;
         _shopName = settings['shop_name'] ?? 'نبراس SofT لنقاط البيع';
-        _currencySymbol = settings['currency_symbol'] ?? 'ر.ي';
         _printerPaper = settings['printer_paper'] ?? '80mm';
         _desktopSyncHost = settings['desktop_sync_host'] ?? '';
         _adminPin = settings['admin_pin'] ?? '';
         _receiptFooter = settings['receipt_footer'] ?? 'شكراً لتعاملكم معنا • Nebras SofT Pos';
         _deviceId = settings['device_id'] ?? '';
-        _dbReady = true;
       });
 
       if (!_updateCheckDone) {
         _updateCheckDone = true;
         await _runStartupUpdateGuard(settings);
       }
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _dbReady = true;
-      });
-    }
+    } catch (_) {}
   }
 
   Future<void> _runStartupUpdateGuard(StringMap settings) async {
@@ -3805,26 +3953,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _onModuleTap(String moduleName) async {
-    if (moduleName == 'التقارير والأرباح' || moduleName == 'النسخ الاحتياطي') {
+    if (moduleName == 'الاستعلامات' || moduleName == 'المصروفات') {
       final ok = await _verifyPinIfRequired(moduleName);
       if (!ok || !mounted) return;
     }
 
     Widget? targetScreen;
-    if (moduleName == 'إدارة الأصناف') {
-      targetScreen = const ProductsScreen();
-    } else if (moduleName == 'نقطة البيع (POS)') {
+    if (moduleName == 'المبيعات') {
       targetScreen = const PosScreen();
-    } else if (moduleName == 'فواتير المشتريات') {
+    } else if (moduleName == 'المشتريات') {
       targetScreen = const PurchasesScreen();
-    } else if (moduleName == 'العملاء والموردين') {
-      targetScreen = const ContactsScreen();
-    } else if (moduleName == 'حركات اليومية والصندوق') {
+    } else if (moduleName == 'العملاء') {
+      targetScreen = const ContactsScreen(initialType: 'customer');
+    } else if (moduleName == 'الموردين') {
+      targetScreen = const ContactsScreen(initialType: 'supplier');
+    } else if (moduleName == 'الصندوق') {
       targetScreen = const CashboxScreen();
-    } else if (moduleName == 'التقارير والأرباح') {
+    } else if (moduleName == 'المصروفات') {
+      targetScreen = const ExpensesScreen();
+    } else if (moduleName == 'المخزون') {
+      targetScreen = const ProductsScreen();
+    } else if (moduleName == 'الاستعلامات') {
       targetScreen = const ReportsScreen();
-    } else if (moduleName == 'النسخ الاحتياطي') {
-      targetScreen = const BackupScreen();
     }
 
     if (targetScreen != null) {
@@ -4108,15 +4258,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('1. أضف التصنيفات والأصناف مع الأسعار والكميات والباركود من "إدارة الأصناف".'),
+              Text('1. أضف التصنيفات والأصناف مع الأسعار والكميات والباركود من "المخزون".'),
               SizedBox(height: 8),
-              Text('2. سجّل فواتير الشراء من "فواتير المشتريات" لزيادة المخزون وتحديث تكلفة الشراء.'),
+              Text('2. سجّل فواتير الشراء من "المشتريات" لزيادة المخزون وتحديث تكلفة الشراء.'),
               SizedBox(height: 8),
-              Text('3. نفّذ البيع واطبع أو شارك الفاتورة الحرارية PDF من "نقطة البيع (POS)".'),
+              Text('3. نفّذ البيع واطبع أو شارك الفاتورة الحرارية PDF من "المبيعات".'),
               SizedBox(height: 8),
-              Text('4. راجع المتوفر النقدي في "حركات اليومية والصندوق" وصافي الربح في "التقارير والأرباح".'),
+              Text('4. راجع المتوفر النقدي في "الصندوق" وصافي الربح في "الاستعلامات".'),
               SizedBox(height: 8),
-              Text('5. خذ نسخة احتياطية بانتظام من "النسخ الاحتياطي".'),
+              Text('5. خذ نسخة احتياطية بانتظام من أيقونة النسخ الاحتياطي بالأعلى.'),
             ],
           ),
         ),
@@ -4468,97 +4618,84 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF3F4F6),
       drawer: _buildSpecialDrawer(),
       appBar: AppBar(
-        title: const Text(
-          'Nebras SofT Pos',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        title: Text(
+          _shopName,
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 17),
         ),
         backgroundColor: const Color(0xFF0F2C7E),
         iconTheme: const IconThemeData(color: Colors.white),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'النسخ الاحتياطي',
+            icon: const Icon(Icons.settings_backup_restore),
+            onPressed: () async {
+              final ok = await _verifyPinIfRequired('النسخ الاحتياطي');
+              if (!ok || !mounted) return;
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const BackupScreen()),
+              );
+              _refreshStats();
+            },
+          ),
+        ],
       ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0F2C7E), Color(0xFF1E56D9)],
-                  begin: Alignment.topRight,
-                  end: Alignment.bottomLeft,
-                ),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _shopName,
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+        padding: const EdgeInsets.all(12),
+        child: GridView.builder(
+          itemCount: _modules.length,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 1.08,
+          ),
+          itemBuilder: (context, index) {
+            final item = _modules[index];
+            return Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              elevation: 1.5,
+              shadowColor: Colors.black12,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => _onModuleTap(item.title),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade200, width: 1.2),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _dbReady
-                        ? 'الأصناف: $_productsCount • العملة: $_currencySymbol'
-                        : 'جاري تهيئة قاعدة البيانات...',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 18),
-            Expanded(
-              child: GridView.builder(
-                itemCount: _modules.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 14,
-                  mainAxisSpacing: 14,
-                  childAspectRatio: 1.15,
-                ),
-                itemBuilder: (context, index) {
-                  final item = _modules[index];
-                  return Card(
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(16),
-                      onTap: () => _onModuleTap(item.title),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircleAvatar(
-                            radius: 26,
-                            backgroundColor: item.color.withAlpha(30),
-                            child: Icon(item.icon, color: item.color, size: 28),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            item.title,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13.5,
-                            ),
-                          ),
-                        ],
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 66,
+                        height: 66,
+                        decoration: BoxDecoration(
+                          color: item.color.withAlpha(24),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Icon(item.icon, color: item.color, size: 36),
                       ),
-                    ),
-                  );
-                },
+                      const SizedBox(height: 12),
+                      Text(
+                        item.title,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16.5,
+                          color: Color(0xFF1E293B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -5718,10 +5855,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'التقارير والأرباح',
+          'الاستعلامات والتقارير',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
-        backgroundColor: const Color(0xFFDC2626),
+        backgroundColor: const Color(0xFF0284C7),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
@@ -6274,14 +6411,16 @@ class _BackupScreenState extends State<BackupScreen> {
 }
 
 class ContactsScreen extends StatefulWidget {
-  const ContactsScreen({super.key});
+  final String initialType;
+
+  const ContactsScreen({super.key, this.initialType = 'customer'});
 
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
-  String _activeType = 'customer';
+  late String _activeType;
   DbRows _contacts = [];
   String _search = '';
   bool _loading = true;
@@ -6289,6 +6428,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   void initState() {
     super.initState();
+    _activeType = widget.initialType;
     _loadContacts();
   }
 
@@ -6609,16 +6749,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'العملاء والموردين',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        title: Text(
+          isCustomer ? 'العملاء' : 'الموردين',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
-        backgroundColor: const Color(0xFF7C3AED),
+        backgroundColor: isCustomer ? const Color(0xFF0D7C66) : const Color(0xFF7C3AED),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openContactDialog(),
-        backgroundColor: const Color(0xFF7C3AED),
+        backgroundColor: isCustomer ? const Color(0xFF0D7C66) : const Color(0xFF7C3AED),
         foregroundColor: Colors.white,
         icon: const Icon(Icons.person_add),
         label: Text(isCustomer ? 'عميل جديد' : 'مورد جديد'),
@@ -6746,7 +6886,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
   }
 }
-
 class PurchasesScreen extends StatefulWidget {
   const PurchasesScreen({super.key});
 
@@ -7119,7 +7258,7 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : products.isEmpty
-                    ? const Center(child: Text('أضف أصنافاً أولاً من شاشة إدارة الأصناف'))
+                    ? const Center(child: Text('أضف أصنافاً أولاً من شاشة المخزون'))
                     : ListView.builder(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         itemCount: products.length,
@@ -7527,7 +7666,7 @@ class _PosScreenState extends State<PosScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'نقطة البيع (POS)',
+          'المبيعات (POS)',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
         backgroundColor: const Color(0xFF1545B5),
@@ -8240,10 +8379,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'إدارة الأصناف',
+          'المخزون والأصناف',
           style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
         ),
-        backgroundColor: const Color(0xFF0D7C66),
+        backgroundColor: const Color(0xFFB45309),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
@@ -8260,7 +8399,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openProductDialog(),
-        backgroundColor: const Color(0xFF0D7C66),
+        backgroundColor: const Color(0xFFB45309),
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('صنف جديد'),
@@ -8315,7 +8454,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 const SizedBox(width: 8),
                 IconButton.filled(
                   onPressed: _scanInProductsSearch,
-                  style: IconButton.styleFrom(backgroundColor: const Color(0xFF0D7C66)),
+                  style: IconButton.styleFrom(backgroundColor: const Color(0xFFB45309)),
                   tooltip: 'مسح باركود بالكاميرا',
                   icon: const Icon(Icons.qr_code_scanner),
                 ),
@@ -8404,6 +8543,237 @@ class _ProductsScreenState extends State<ProductsScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class ExpensesScreen extends StatefulWidget {
+  const ExpensesScreen({super.key});
+
+  @override
+  State<ExpensesScreen> createState() => _ExpensesScreenState();
+}
+
+class _ExpensesScreenState extends State<ExpensesScreen> {
+  DbRows _expenses = [];
+  double _totalExpenses = 0.0;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExpenses();
+  }
+
+  Future<void> _loadExpenses() async {
+    setState(() => _loading = true);
+    final db = await DatabaseHelper.instance.database;
+    final rows = await db.query('expenses', orderBy: 'id DESC');
+    double sum = 0.0;
+    for (final r in rows) {
+      sum += (r['amount'] as num?)?.toDouble() ?? 0.0;
+    }
+    if (!mounted) return;
+    setState(() {
+      _expenses = rows;
+      _totalExpenses = sum;
+      _loading = false;
+    });
+  }
+
+  Future<void> _openAddExpenseDialog() async {
+    final titleCtrl = TextEditingController();
+    final amountCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+    String category = 'إيجار ومصاريف ثابتة';
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('تسجيل مصروف جديد', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'بيان المصروف *',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: category,
+                  decoration: const InputDecoration(
+                    labelText: 'تصنيف المصروف',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'إيجار ومصاريف ثابتة', child: Text('إيجار ومصاريف ثابتة')),
+                    DropdownMenuItem(value: 'كهرباء ونت', child: Text('كهرباء ونت')),
+                    DropdownMenuItem(value: 'رواتب وأجور', child: Text('رواتب وأجور')),
+                    DropdownMenuItem(value: 'نقل ومواصلات', child: Text('نقل ومواصلات')),
+                    DropdownMenuItem(value: 'مصروفات متنوعة', child: Text('مصروفات متنوعة')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setDialogState(() => category = v);
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'المبلغ *',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: notesCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'ملاحظات (اختياري)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+              onPressed: () async {
+                final title = titleCtrl.text.trim();
+                final amt = double.tryParse(amountCtrl.text.trim()) ?? 0.0;
+                if (title.isEmpty || amt <= 0) return;
+                await DatabaseHelper.instance.insertExpense(
+                  title: title,
+                  category: category,
+                  amount: amt,
+                  notes: notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop(true);
+              },
+              child: const Text('حفظ المصروف'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await _loadExpenses();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حفظ المصروف بنجاح')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'المصروفات',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFFDC2626),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openAddExpenseDialog,
+        backgroundColor: const Color(0xFFDC2626),
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add),
+        label: const Text('مصروف جديد'),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFDC2626),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'إجمالي المصروفات:',
+                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        _totalExpenses.toStringAsFixed(2),
+                        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: _expenses.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'لا توجد مصروفات مسجلة بعد، اضغط "مصروف جديد"',
+                            style: TextStyle(color: Colors.black54),
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 84),
+                          itemCount: _expenses.length,
+                          itemBuilder: (context, index) {
+                            final exp = _expenses[index];
+                            final int expId = exp['id'] as int;
+                            final double amt = (exp['amount'] as num?)?.toDouble() ?? 0.0;
+                            final String dateStr = (exp['date'] ?? '').toString().split('T').first;
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                leading: const CircleAvatar(
+                                  backgroundColor: Color(0x22DC2626),
+                                  child: Icon(Icons.receipt_long, color: Color(0xFFDC2626)),
+                                ),
+                                title: Text(
+                                  '${exp['title']} (${exp['category'] ?? ''})',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                subtitle: Text(dateStr),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      amt.toStringAsFixed(2),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFFDC2626),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline, color: Colors.black54),
+                                      onPressed: () async {
+                                        await DatabaseHelper.instance.deleteExpense(expId);
+                                        await _loadExpenses();
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
     );
   }
 }
