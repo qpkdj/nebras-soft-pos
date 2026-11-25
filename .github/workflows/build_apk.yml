@@ -104,6 +104,14 @@ jobs:
       - name: تحميل المكتبات
         run: flutter pub get
 
+      - name: تركيب أيقونة التطبيق المخصصة
+        run: |
+          if [ -f "assets/logo.png" ]; then
+            dart run flutter_launcher_icons
+          else
+            echo "لم يتم العثور على assets/logo.png - سيتم استخدام الأيقونة الافتراضية"
+          fi
+
       - name: تحديث توافق مكتبة file_picker مع Android API 36
         run: |
           python3 - << 'EOF'
