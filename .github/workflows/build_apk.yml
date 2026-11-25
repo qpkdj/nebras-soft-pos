@@ -48,9 +48,51 @@ jobs:
               gradle = gradle.replace("minSdk = flutter.minSdkVersion", "minSdk = 29")
               with open(groovy_path, "w", encoding="utf-8") as f:
                   f.write(gradle)
+
+          root_kts = "android/build.gradle.kts"
+          root_groovy = "android/build.gradle"
+
+          if os.path.exists(root_kts):
+              with open(root_kts, "r", encoding="utf-8") as f:
+                  root_gradle = f.read()
+              fix_sdk = """subprojects {
+              plugins.withId("com.android.library") {
+                  extensions.configure<com.android.build.api.dsl.LibraryExtension> {
+                      compileSdk = 36
+                  }
+              }
+          }"""
+              if "LibraryExtension" not in root_gradle:
+                  root_gradle = root_gradle.replace(
+                      "subprojects {",
+                      fix_sdk + "\n\nsubprojects {",
+                      1
+                  )
+              with open(root_kts, "w", encoding="utf-8") as f:
+                  f.write(root_gradle)
+          elif os.path.exists(root_groovy):
+              with open(root_groovy, "r", encoding="utf-8") as f:
+                  root_gradle = f.read()
+              fix_sdk_groovy = """subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 36
+                      }
+                  }
+              }
+          }"""
+              if "compileSdkVersion 36" not in root_gradle:
+                  root_gradle = root_gradle.replace(
+                      "subprojects {",
+                      fix_sdk_groovy + "\n\nsubprojects {",
+                      1
+                  )
+              with open(root_groovy, "w", encoding="utf-8") as f:
+                  f.write(root_gradle)
           EOF
 
-      - name: حقن الأذونات وإعدادات التخزين في AndroidManifest
+      - name: حقن الأذونات وإعدادات التخزين والصوت في AndroidManifest
         run: |
           python3 - << 'EOF'
           path = "android/app/src/main/AndroidManifest.xml"
@@ -79,12 +121,23 @@ jobs:
               <uses-permission android:name="android.permission.WRITE_CONTACTS"/>
           """
 
+          queries = """    <queries>
+                  <intent>
+                      <action android:name="android.speech.RecognitionService" />
+                  </intent>
+                  <package android:name="com.google.android.googlequicksearchbox" />
+              </queries>
+          """
+
           if "android.permission.CAMERA" not in content:
               content = content.replace(
                   "<application",
                   perms + '\n    <application android:requestLegacyExternalStorage="true"',
                   1
               )
+
+          if "RecognitionService" not in content:
+              content = content.replace("</manifest>", queries + "\n</manifest>", 1)
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(content)
