@@ -27,24 +27,34 @@ jobs:
       - name: توليد مجلد Android تلقائياً
         run: flutter create --platforms=android .
 
-      - name: ضبط دعم أندرويد 10 فما فوق (API 29+) وحقن الأذونات
+      - name: ضبط التوافق من Android 10 وحتى أحدث إصدار
         run: |
           python3 - << 'EOF'
-          import os, re
+          import os
 
-          # 1. ضبط الحد الأدنى للإصدار minSdk = 29 (أندرويد 10 فما فوق)
-          for gradle_path in ["android/app/build.gradle.kts", "android/app/build.gradle"]:
-              if os.path.exists(gradle_path):
-                  with open(gradle_path, "r", encoding="utf-8") as f:
-                      g = f.read()
-                  g = re.sub(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 29", g)
-                  g = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 29", g)
-                  with open(gradle_path, "w", encoding="utf-8") as f:
-                      f.write(g)
+          kts_path = "android/app/build.gradle.kts"
+          groovy_path = "android/app/build.gradle"
 
-          # 2. حقن الأذونات وتوافق التخزين لأندرويد 10 في AndroidManifest.xml
-          manifest_path = "android/app/src/main/AndroidManifest.xml"
-          with open(manifest_path, "r", encoding="utf-8") as f:
+          if os.path.exists(kts_path):
+              with open(kts_path, "r", encoding="utf-8") as f:
+                  gradle = f.read()
+              gradle = gradle.replace("minSdk = flutter.minSdkVersion", "minSdk = 29")
+              with open(kts_path, "w", encoding="utf-8") as f:
+                  f.write(gradle)
+          elif os.path.exists(groovy_path):
+              with open(groovy_path, "r", encoding="utf-8") as f:
+                  gradle = f.read()
+              gradle = gradle.replace("minSdkVersion flutter.minSdkVersion", "minSdkVersion 29")
+              gradle = gradle.replace("minSdk = flutter.minSdkVersion", "minSdk = 29")
+              with open(groovy_path, "w", encoding="utf-8") as f:
+                  f.write(gradle)
+          EOF
+
+      - name: حقن الأذونات وإعدادات التخزين في AndroidManifest
+        run: |
+          python3 - << 'EOF'
+          path = "android/app/src/main/AndroidManifest.xml"
+          with open(path, "r", encoding="utf-8") as f:
               content = f.read()
 
           perms = """    <uses-permission android:name="android.permission.INTERNET"/>
@@ -70,9 +80,13 @@ jobs:
           """
 
           if "android.permission.CAMERA" not in content:
-              content = content.replace("<application", perms + '\n    <application android:requestLegacyExternalStorage="true"', 1)
+              content = content.replace(
+                  "<application",
+                  perms + '\n    <application android:requestLegacyExternalStorage="true"',
+                  1
+              )
 
-          with open(manifest_path, "w", encoding="utf-8") as f:
+          with open(path, "w", encoding="utf-8") as f:
               f.write(content)
           EOF
 
