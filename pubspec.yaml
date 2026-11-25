@@ -31,7 +31,7 @@ dependencies:
   printing: ^5.13.4
 
   # النسخ الاحتياطي واختيار الملفات والمشاركة والروابط الخارجية
-  file_picker:
+  file_picker: ^8.1.2
   share_plus: ^10.1.0
   url_launcher: ^6.3.1
 
