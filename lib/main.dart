@@ -6278,7 +6278,7 @@ class _BackupScreenState extends State<BackupScreen> {
       final dbFile = File(dbPath);
       if (!await dbFile.exists()) return;
 
-      final selectedDir = await FilePicker.platform.getDirectoryPath(
+      final selectedDir = await FilePicker.getDirectoryPath(
         dialogTitle: 'اختر مجلد الذاكرة الداخلية أو بطاقة SD الخارجية',
       );
 
@@ -6319,7 +6319,7 @@ class _BackupScreenState extends State<BackupScreen> {
     setState(() => _busy = true);
     try {
       await AppPermissionsService.ensureStoragePermissions();
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         dialogTitle: 'اختر ملف النسخة الاحتياطية (.db)',
         type: FileType.any,
       );
