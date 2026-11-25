@@ -48,48 +48,6 @@ jobs:
               gradle = gradle.replace("minSdk = flutter.minSdkVersion", "minSdk = 29")
               with open(groovy_path, "w", encoding="utf-8") as f:
                   f.write(gradle)
-
-          root_kts = "android/build.gradle.kts"
-          root_groovy = "android/build.gradle"
-
-          if os.path.exists(root_kts):
-              with open(root_kts, "r", encoding="utf-8") as f:
-                  root_gradle = f.read()
-              fix_sdk = """subprojects {
-              plugins.withId("com.android.library") {
-                  extensions.configure<com.android.build.api.dsl.LibraryExtension> {
-                      compileSdk = 36
-                  }
-              }
-          }"""
-              if "LibraryExtension" not in root_gradle:
-                  root_gradle = root_gradle.replace(
-                      "subprojects {",
-                      fix_sdk + "\n\nsubprojects {",
-                      1
-                  )
-              with open(root_kts, "w", encoding="utf-8") as f:
-                  f.write(root_gradle)
-          elif os.path.exists(root_groovy):
-              with open(root_groovy, "r", encoding="utf-8") as f:
-                  root_gradle = f.read()
-              fix_sdk_groovy = """subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          compileSdkVersion 36
-                      }
-                  }
-              }
-          }"""
-              if "compileSdkVersion 36" not in root_gradle:
-                  root_gradle = root_gradle.replace(
-                      "subprojects {",
-                      fix_sdk_groovy + "\n\nsubprojects {",
-                      1
-                  )
-              with open(root_groovy, "w", encoding="utf-8") as f:
-                  f.write(root_gradle)
           EOF
 
       - name: حقن الأذونات وإعدادات التخزين والصوت في AndroidManifest
@@ -145,6 +103,24 @@ jobs:
 
       - name: تحميل المكتبات
         run: flutter pub get
+
+      - name: تحديث توافق مكتبة file_picker مع Android API 36
+        run: |
+          python3 - << 'EOF'
+          import glob, os, re
+
+          pub_cache = os.environ.get("PUB_CACHE", os.path.expanduser("~/.pub-cache"))
+          pattern = os.path.join(pub_cache, "hosted", "*", "file_picker-*", "android", "build.gradle*")
+          for path in glob.glob(pattern):
+              with open(path, "r", encoding="utf-8") as f:
+                  s = f.read()
+              s = re.sub(r"compileSdkVersion\s+\d+", "compileSdkVersion 36", s)
+              s = re.sub(r"compileSdk\s*=\s*\d+", "compileSdk = 36", s)
+              s = re.sub(r"compileSdk\s+\d+", "compileSdk 36", s)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(s)
+              print("Patched compileSdk 36 in:", path)
+          EOF
 
       - name: بناء ملف APK النهائي
         run: flutter build apk --release --no-shrink
