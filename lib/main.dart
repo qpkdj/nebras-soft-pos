@@ -7898,7 +7898,7 @@ class _ContactsScreenState extends State<ContactsScreen>
               tooltip: 'تصدير كشف الحسابات Excel',
               icon: const Icon(Icons.file_download_outlined),
               onPressed: () async {
-                final rows = StrMatrix();
+                final StrMatrix rows = [];
                 for (final c in list) {
                   rows.add([
                     (c['name'] ?? '').toString(),
@@ -8299,7 +8299,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
               tooltip: 'تصدير حركات الصندوق Excel',
               icon: const Icon(Icons.file_download_outlined),
               onPressed: () async {
-                final rows = StrMatrix();
+                final StrMatrix rows = [];
                 for (final t in list) {
                   final typeStr = (t['type'] ?? '').toString();
                   final label = typeStr == 'in'
