@@ -1,11 +1,10 @@
 // =============================================================================
-// القسم (1 من 10): الاستيرادات، تشغيل التطبيق، وخدمات النظام والأذونات
+// القسم (1 من 10): الاستيرادات، التعريفات، تشغيل التطبيق، وخدمات الأذونات
 // =============================================================================
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +23,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 typedef DbRow = Map<String, Object?>;
 typedef DbRows = List<DbRow>;
+typedef StrMap = Map<String, String>;
+typedef NumMap = Map<String, double>;
+typedef StrMatrix = List<List<String>>;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -161,7 +163,7 @@ class CsvExportService {
   static Future<File> writeCsvAndShare({
     required String fileNamePrefix,
     required List<String> headers,
-    required List<List<String>> rows,
+    required StrMatrix rows,
     String shareSubject = 'تقرير نظام نبراس SofT',
   }) async {
     await AppPermissionsService.ensureStoragePermissions();
@@ -321,7 +323,6 @@ class DatabaseHelper {
       )
     ''');
 
-    // القيم الافتراضية للإعدادات والتصنيف الأساسي
     const defaultSettings = <String, String>{
       'store_name': 'نبراس SofT',
       'store_phone': '',
@@ -363,10 +364,10 @@ class DatabaseHelper {
   // ---------------------------------------------------------------------------
   // الإعدادات
   // ---------------------------------------------------------------------------
-  Future> getSettingsMap() async {
+  Future<StrMap> getSettingsMap() async {
     final db = await database;
     final rows = await db.query('settings');
-    final map = <String, String>{};
+    final map = StrMap();
     for (final r in rows) {
       final k = (r['key'] ?? '').toString();
       if (k.isNotEmpty) {
@@ -438,7 +439,7 @@ class DatabaseHelper {
 
   Future<int> insertContact(DbRow row) async {
     final db = await database;
-    final data = Map<String, Object?>.from(row);
+    final data = DbRow.from(row);
     data['created_at'] ??= DateTime.now().toIso8601String();
     return db.insert('contacts', data);
   }
@@ -493,7 +494,7 @@ class DatabaseHelper {
   Future<int> createSaleInvoice({
     int? customerId,
     String? customerName,
-    required List<DbRow> items,
+    required DbRows items,
     double discount = 0.0,
     double tax = 0.0,
     required double paid,
@@ -511,7 +512,7 @@ class DatabaseHelper {
     final total = (subtotal - discount + tax).clamp(0.0, double.infinity);
     final remaining = (total - paid).clamp(0.0, double.infinity);
 
-    return db.transaction<int>((txn) async {
+    return db.transaction((txn) async {
       final invNumber = 'SL-${DateTime.now().millisecondsSinceEpoch % 1000000}';
       final invId = await txn.insert('invoices', {
         'invoice_number': invNumber,
@@ -579,7 +580,7 @@ class DatabaseHelper {
   Future<int> createPurchaseInvoice({
     int? supplierId,
     String? supplierName,
-    required List<DbRow> items,
+    required DbRows items,
     double discount = 0.0,
     required double paid,
     String paymentMethod = 'cash',
@@ -596,7 +597,7 @@ class DatabaseHelper {
     final total = (subtotal - discount).clamp(0.0, double.infinity);
     final remaining = (total - paid).clamp(0.0, double.infinity);
 
-    return db.transaction<int>((txn) async {
+    return db.transaction((txn) async {
       final invNumber = 'PR-${DateTime.now().millisecondsSinceEpoch % 1000000}';
       final invId = await txn.insert('invoices', {
         'invoice_number': invNumber,
@@ -710,12 +711,12 @@ class DatabaseHelper {
 
   Future<int> insertCashTransaction(DbRow row) async {
     final db = await database;
-    final data = Map<String, Object?>.from(row);
+    final data = DbRow.from(row);
     data['created_at'] ??= DateTime.now().toIso8601String();
     return db.insert('cash_transactions', data);
   }
 
-  Future> getFinancialSummary({String? datePrefix}) async {
+  Future<NumMap> getFinancialSummary({String? datePrefix}) async {
     final db = await database;
     final dateFilter = (datePrefix != null && datePrefix.isNotEmpty) ? '$datePrefix%' : null;
 
@@ -1081,7 +1082,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 class _NsScannerViewfinderPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final overlayPaint = Paint()..color = Colors.black.withOpacity(0.48);
+    final overlayPaint = Paint()..color = Colors.black.withAlpha(122);
     final boxWidth = size.width * 0.78;
     final boxHeight = size.height * 0.30;
     final left = (size.width - boxWidth) / 2;
@@ -1402,7 +1403,7 @@ class ThermalPrintService {
   }
 }
 // =============================================================================
-// القسم (4 من 10): الواجهة الرئيسية للتطبيق (HomeDashboardScreen)
+// القسم (4 من 10): الواجهة الرئيسية للتطبيق (HomeDashboardScreen) مع أيقونة الروبوت
 // =============================================================================
 
 class HomeDashboardScreen extends StatefulWidget {
@@ -1541,6 +1542,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     required Color color,
     required VoidCallback onTap,
     String? badgeText,
+    Widget? customIconWidget,
   }) {
     return Material(
       color: Colors.white,
@@ -1562,15 +1564,16 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: color.withAlpha(28),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(icon, size: 28, color: color),
-                  ),
+                  customIconWidget ??
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: color.withAlpha(28),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(icon, size: 28, color: color),
+                      ),
                   const SizedBox(height: 10),
                   Text(
                     title,
@@ -1634,7 +1637,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             children: [
               // الشريط العلوي للنظام
               Container(
-                padding: const EdgeInsets.fromLTRB(14, 14, 16, 14),
+                padding: const EdgeInsets.fromLTRB(12, 14, 16, 14),
                 decoration: const BoxDecoration(
                   color: Color(0xFF1545B5),
                   borderRadius: BorderRadius.vertical(
@@ -1682,6 +1685,18 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                             ),
                           ),
                         ],
+                      ),
+                    ),
+                    // أيقونة شخصية الروبوت لفتح بوت المساعد الذكي
+                    InkWell(
+                      onTap: () => _openScreen(const NebrasBotChatScreen()),
+                      borderRadius: BorderRadius.circular(22),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: Tooltip(
+                          message: 'مساعد نبراس الذكي',
+                          child: NebrasRobotAvatar(size: 38),
+                        ),
                       ),
                     ),
                     IconButton(
@@ -1793,6 +1808,14 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                       color: const Color(0xFF4B5563),
                       onTap: () => _openScreen(const BackupAndSettingsScreen()),
                     ),
+                    _buildModuleTile(
+                      title: 'المساعد الذكي',
+                      subtitle: 'شرح النظام والدعم الفني',
+                      icon: Icons.smart_toy_rounded,
+                      color: const Color(0xFF0284C7),
+                      customIconWidget: const NebrasRobotAvatar(size: 52),
+                      onTap: () => _openScreen(const NebrasBotChatScreen()),
+                    ),
                   ],
                 ),
               ),
@@ -1818,7 +1841,7 @@ class _SalesScreenState extends State<SalesScreen> {
   DbRows _allProducts = [];
   DbRows _categories = [];
   DbRows _customers = [];
-  final List<DbRow> _cartItems = [];
+  final DbRows _cartItems = [];
 
   String _currencySymbol = 'ريال';
   double _exchangeRate = 1.0;
@@ -2051,123 +2074,121 @@ class _SalesScreenState extends State<SalesScreen> {
 
     await showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => Directionality(
-          textDirection: TextDirection.rtl,
-          child: AlertDialog(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.white,
-            title: const Text(
-              'اختيار أو إضافة عميل',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16.5),
-            ),
-            content: SizedBox(
-              width: double.maxFinite,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.person_outline, color: Color(0xFF16A34A)),
-                      title: const Text('عميل نقدي (بدون اسم)', style: TextStyle(fontWeight: FontWeight.bold)),
-                      trailing: _selectedCustomerId == null
-                          ? const Icon(Icons.check_circle, color: Color(0xFF16A34A))
-                          : null,
-                      onTap: () {
-                        setState(() {
-                          _selectedCustomerId = null;
-                          _selectedCustomerName = null;
-                        });
-                        Navigator.of(ctx).pop();
-                      },
-                    ),
-                    const Divider(),
-                    if (_customers.isNotEmpty)
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 190),
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: _customers.length,
-                          itemBuilder: (_, idx) {
-                            final c = _customers[idx];
-                            final cid = c['id'] as int;
-                            final bal = (c['balance'] as num?)?.toDouble() ?? 0.0;
-                            return ListTile(
-                              dense: true,
-                              title: Text((c['name'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w600)),
-                              subtitle: Text('الرصيد: ${bal.toStringAsFixed(2)} $_currencySymbol'),
-                              trailing: _selectedCustomerId == cid
-                                  ? const Icon(Icons.check_circle, color: Color(0xFF1545B5))
-                                  : null,
-                              onTap: () {
-                                setState(() {
-                                  _selectedCustomerId = cid;
-                                  _selectedCustomerName = (c['name'] ?? '').toString();
-                                });
-                                Navigator.of(ctx).pop();
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    const Divider(),
-                    const Align(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        'إضافة عميل جديد سريع:',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          title: const Text(
+            'اختيار أو إضافة عميل',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16.5),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.person_outline, color: Color(0xFF16A34A)),
+                    title: const Text('عميل نقدي (بدون اسم)', style: TextStyle(fontWeight: FontWeight.bold)),
+                    trailing: _selectedCustomerId == null
+                        ? const Icon(Icons.check_circle, color: Color(0xFF16A34A))
+                        : null,
+                    onTap: () {
+                      setState(() {
+                        _selectedCustomerId = null;
+                        _selectedCustomerName = null;
+                      });
+                      Navigator.of(ctx).pop();
+                    },
+                  ),
+                  const Divider(),
+                  if (_customers.isNotEmpty)
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 190),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: _customers.length,
+                        itemBuilder: (_, idx) {
+                          final c = _customers[idx];
+                          final cid = c['id'] as int;
+                          final bal = (c['balance'] as num?)?.toDouble() ?? 0.0;
+                          return ListTile(
+                            dense: true,
+                            title: Text((c['name'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.w600)),
+                            subtitle: Text('الرصيد: ${bal.toStringAsFixed(2)} $_currencySymbol'),
+                            trailing: _selectedCustomerId == cid
+                                ? const Icon(Icons.check_circle, color: Color(0xFF1545B5))
+                                : null,
+                            onTap: () {
+                              setState(() {
+                                _selectedCustomerId = cid;
+                                _selectedCustomerName = (c['name'] ?? '').toString();
+                              });
+                              Navigator.of(ctx).pop();
+                            },
+                          );
+                        },
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'اسم العميل *',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
+                  const Divider(),
+                  const Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      'إضافة عميل جديد سريع:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: phoneCtrl,
-                            keyboardType: TextInputType.phone,
-                            decoration: const InputDecoration(
-                              labelText: 'رقم الهاتف',
-                              isDense: true,
-                              border: OutlineInputBorder(),
-                            ),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'اسم العميل *',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: phoneCtrl,
+                          keyboardType: TextInputType.phone,
+                          decoration: const InputDecoration(
+                            labelText: 'رقم الهاتف',
+                            isDense: true,
+                            border: OutlineInputBorder(),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        FilledButton(
-                          onPressed: () async {
-                            final cName = nameCtrl.text.trim();
-                            if (cName.isEmpty) return;
-                            final newId = await DatabaseHelper.instance.insertContact({
-                              'name': cName,
-                              'phone': phoneCtrl.text.trim(),
-                              'type': 'customer',
-                              'balance': 0.0,
-                            });
-                            final updated = await DatabaseHelper.instance.queryContacts(type: 'customer');
-                            if (!mounted) return;
-                            setState(() {
-                              _customers = updated;
-                              _selectedCustomerId = newId;
-                              _selectedCustomerName = cName;
-                            });
-                            if (ctx.mounted) Navigator.of(ctx).pop();
-                          },
-                          child: const Text('إضافة'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: () async {
+                          final cName = nameCtrl.text.trim();
+                          if (cName.isEmpty) return;
+                          final newId = await DatabaseHelper.instance.insertContact({
+                            'name': cName,
+                            'phone': phoneCtrl.text.trim(),
+                            'type': 'customer',
+                            'balance': 0.0,
+                          });
+                          final updated = await DatabaseHelper.instance.queryContacts(type: 'customer');
+                          if (!mounted) return;
+                          setState(() {
+                            _customers = updated;
+                            _selectedCustomerId = newId;
+                            _selectedCustomerName = cName;
+                          });
+                          if (ctx.mounted) Navigator.of(ctx).pop();
+                        },
+                        child: const Text('إضافة'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -2362,7 +2383,7 @@ class _SalesScreenState extends State<SalesScreen> {
                             final invId = await DatabaseHelper.instance.createSaleInvoice(
                               customerId: _selectedCustomerId,
                               customerName: _selectedCustomerName ?? 'عميل نقدي',
-                              items: List<DbRow>.from(_cartItems),
+                              items: DbRows.from(_cartItems),
                               discount: _discount,
                               paid: paidVal,
                               paymentMethod: payMode,
@@ -2768,13 +2789,13 @@ class _SalesScreenState extends State<SalesScreen> {
             // الشريط السفلي للإجمالي والحفظ والخصم
             Container(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
+                    color: Color(0x14000000),
                     blurRadius: 6,
-                    offset: const Offset(0, -2),
+                    offset: Offset(0, -2),
                   ),
                 ],
               ),
@@ -2884,7 +2905,7 @@ class PurchasesScreen extends StatefulWidget {
 class _PurchasesScreenState extends State<PurchasesScreen> {
   DbRows _allProducts = [];
   DbRows _suppliers = [];
-  final List<DbRow> _purchaseItems = [];
+  final DbRows _purchaseItems = [];
 
   String _currencySymbol = 'ريال';
   double _exchangeRate = 1.0;
@@ -3812,7 +3833,7 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
                             final invId = await DatabaseHelper.instance.createPurchaseInvoice(
                               supplierId: _selectedSupplierId,
                               supplierName: _selectedSupplierName ?? 'مورد نقدي',
-                              items: List<DbRow>.from(_purchaseItems),
+                              items: DbRows.from(_purchaseItems),
                               paid: paidVal,
                               paymentMethod: payMode,
                               notes: notesCtrl.text.trim(),
@@ -3927,8 +3948,8 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
   Widget build(BuildContext context) {
     final supName = _selectedSupplierName;
     final secondaryTotal = _exchangeRate > 0 ? (_grandTotal / _exchangeRate) : 0.0;
-    final matchingSuggestions = _search.trim().isEmpty
-        ? <DbRow>[]
+    final DbRows matchingSuggestions = _search.trim().isEmpty
+        ? DbRows.empty()
         : _allProducts
             .where((p) {
               final q = _search.trim().toLowerCase();
@@ -4419,11 +4440,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(4),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Color(0x0F000000),
             blurRadius: 4,
-            offset: const Offset(0, 2),
+            offset: Offset(0, 2),
           ),
         ],
       ),
@@ -6887,7 +6908,7 @@ class _BulkPriceEditScreenState extends State<_BulkPriceEditScreen> {
       final db = await DatabaseHelper.instance.database;
       await db.transaction((txn) async {
         for (final prod in targetProducts) {
-          final Map<String, Object?> updates = {};
+          final DbRow updates = {};
           if (_priceTarget == 'purchase') {
             final curCost = (prod['purchase_price'] as num?)?.toDouble() ?? 0.0;
             updates['purchase_price'] = _calculateNewPrice(curCost, val);
@@ -6954,11 +6975,11 @@ class _BulkPriceEditScreenState extends State<_BulkPriceEditScreen> {
                 shape: BoxShape.circle,
                 color: Colors.white,
                 border: Border.all(color: const Color(0xFF8E8E93), width: 1.6),
-                boxShadow: [
+                boxShadow: const [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
+                    color: Color(0x14000000),
                     blurRadius: 2,
-                    offset: const Offset(0, 1),
+                    offset: Offset(0, 1),
                   ),
                 ],
               ),
@@ -7877,14 +7898,15 @@ class _ContactsScreenState extends State<ContactsScreen>
               tooltip: 'تصدير كشف الحسابات Excel',
               icon: const Icon(Icons.file_download_outlined),
               onPressed: () async {
-                final rows = list.map((c) {
-                  return [
+                final rows = StrMatrix();
+                for (final c in list) {
+                  rows.add([
                     (c['name'] ?? '').toString(),
                     (c['phone'] ?? '').toString(),
                     (c['address'] ?? '').toString(),
                     ((c['balance'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
-                  ];
-                }).toList();
+                  ]);
+                }
                 await CsvExportService.writeCsvAndShare(
                   fileNamePrefix: isCustomerTab ? 'customers_balances' : 'suppliers_balances',
                   headers: ['الاسم', 'الهاتف', 'العنوان', 'الرصيد المتبقي'],
@@ -8277,19 +8299,20 @@ class _CashboxScreenState extends State<CashboxScreen> {
               tooltip: 'تصدير حركات الصندوق Excel',
               icon: const Icon(Icons.file_download_outlined),
               onPressed: () async {
-                final rows = list.map((t) {
+                final rows = StrMatrix();
+                for (final t in list) {
                   final typeStr = (t['type'] ?? '').toString();
                   final label = typeStr == 'in'
                       ? 'وارد'
                       : (typeStr == 'expense' ? 'مصروف' : 'صادر');
-                  return [
+                  rows.add([
                     label,
                     (t['category'] ?? '').toString(),
                     (t['description'] ?? '').toString(),
                     ((t['amount'] as num?)?.toDouble() ?? 0.0).toStringAsFixed(2),
                     (t['created_at'] ?? '').toString().replaceAll('T', ' ').split('.').first,
-                  ];
-                }).toList();
+                  ]);
+                }
                 await CsvExportService.writeCsvAndShare(
                   fileNamePrefix: 'cashbox_statement',
                   headers: ['النوع', 'البند', 'البيان', 'المبلغ', 'التاريخ'],
@@ -8468,7 +8491,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
   }
 }
 // =============================================================================
-// القسم (10 من 10): التقارير والأرباح (ReportsScreen) + النسخ الاحتياطي والإعدادات
+// القسم (10 من 10): التقارير والأرباح + النسخ الاحتياطي + المساعد الذكي (الروبوت)
 // =============================================================================
 
 class ReportsScreen extends StatefulWidget {
@@ -8483,7 +8506,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   String _period = 'today'; // today | month | all | custom
   DateTime _customDate = DateTime.now();
 
-  Map<String, double> _summary = {};
+  NumMap _summary = {};
   DbRows _topProducts = [];
   bool _loading = true;
 
@@ -8671,7 +8694,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _exportReportCsv() async {
-    final rows = <List<String>>[
+    final rows = StrMatrix.from([
       ['الفترة', _periodTitle],
       ['إجمالي المبيعات', (_summary['salesTotal'] ?? 0.0).toStringAsFixed(2)],
       ['إجمالي المشتريات', (_summary['purchasesTotal'] ?? 0.0).toStringAsFixed(2)],
@@ -8682,7 +8705,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ['قيمة المخزون بالتكلفة', (_summary['inventoryCostValue'] ?? 0.0).toStringAsFixed(2)],
       ['ديون العملاء', (_summary['customersDebt'] ?? 0.0).toStringAsFixed(2)],
       ['مستحقات الموردين', (_summary['suppliersDebt'] ?? 0.0).toStringAsFixed(2)],
-    ];
+    ]);
 
     await CsvExportService.writeCsvAndShare(
       fileNamePrefix: 'financial_report',
@@ -9175,7 +9198,6 @@ class _BackupAndSettingsScreenState extends State<BackupAndSettingsScreen> {
     final selectedFile = File(picked.files.single.path!);
     if (!await selectedFile.exists()) return;
 
-    // التحقق من ترويسة ملف قاعدة بيانات SQLite لضمان سلامة الملف المختار
     final bytes = await selectedFile.openRead(0, 16).fold<List<int>>(
       <int>[],
       (prev, chunk) => prev..addAll(chunk),
@@ -9434,7 +9456,7 @@ class _BackupAndSettingsScreenState extends State<BackupAndSettingsScreen> {
                           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
                         ),
                         const SizedBox(height: 6),
-                        SegmentedButton<String>(
+                        SegmentedButton(
                           segments: const [
                             ButtonSegment(value: '80', label: Text('ورق عريض 80mm')),
                             ButtonSegment(value: '58', label: Text('ورق صغير 58mm')),
@@ -9474,6 +9496,851 @@ class _BackupAndSettingsScreenState extends State<BackupAndSettingsScreen> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// بوت الدردشة الذكي وشخصية الروبوت (NebrasBotChatScreen)
+// =============================================================================
+
+class NebrasRobotAvatar extends StatelessWidget {
+  final double size;
+
+  const NebrasRobotAvatar({super.key, this.size = 44});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0EA5E9), Color(0xFF1545B5)],
+        ),
+        border: Border.all(color: Colors.white, width: size * 0.045),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x590EA5E9),
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: CustomPaint(
+        painter: _NebrasRobotCharacterPainter(),
+      ),
+    );
+  }
+}
+
+class _NebrasRobotCharacterPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    final whitePaint = Paint()..color = Colors.white;
+    final visorPaint = Paint()..color = const Color(0xFF0F172A);
+    final eyeGlowPaint = Paint()..color = const Color(0xFF38BDF8);
+    final antennaTipPaint = Paint()..color = const Color(0xFFFACC15);
+    final earPaint = Paint()..color = const Color(0xFFE2E8F0);
+    final neckPaint = Paint()..color = const Color(0xFFCBD5E1);
+
+    // 1. الهوائي العلوي للروبوت
+    final stemPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = w * 0.055
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(w * 0.50, h * 0.25),
+      Offset(w * 0.50, h * 0.13),
+      stemPaint,
+    );
+    canvas.drawCircle(Offset(w * 0.50, h * 0.11), w * 0.065, antennaTipPaint);
+
+    // 2. سماعات الأذن الجانبية للروبوت
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(w * 0.13, h * 0.37, w * 0.09, h * 0.22),
+        Radius.circular(w * 0.04),
+      ),
+      earPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(w * 0.78, h * 0.37, w * 0.09, h * 0.22),
+        Radius.circular(w * 0.04),
+      ),
+      earPaint,
+    );
+
+    // 3. رأس الروبوت
+    final headRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(w * 0.20, h * 0.25, w * 0.60, h * 0.46),
+      Radius.circular(w * 0.15),
+    );
+    canvas.drawRRect(headRect, whitePaint);
+
+    // 4. شاشة الوجه الداكنة (Visor)
+    final visorRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(w * 0.26, h * 0.32, w * 0.48, h * 0.30),
+      Radius.circular(w * 0.10),
+    );
+    canvas.drawRRect(visorRect, visorPaint);
+
+    // 5. العيون المضيئة للروبوت
+    canvas.drawCircle(Offset(w * 0.39, h * 0.44), w * 0.055, eyeGlowPaint);
+    canvas.drawCircle(Offset(w * 0.61, h * 0.44), w * 0.055, eyeGlowPaint);
+
+    // لمعة صغيرة داخل العين
+    canvas.drawCircle(Offset(w * 0.375, h * 0.425), w * 0.018, whitePaint);
+    canvas.drawCircle(Offset(w * 0.595, h * 0.425), w * 0.018, whitePaint);
+
+    // 6. ابتسامة الروبوت الرقمية
+    final smilePaint = Paint()
+      ..color = const Color(0xFF4ADE80)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.042
+      ..strokeCap = StrokeCap.round;
+    final smilePath = Path()
+      ..moveTo(w * 0.42, h * 0.53)
+      ..quadraticBezierTo(w * 0.50, h * 0.59, w * 0.58, h * 0.53);
+    canvas.drawPath(smilePath, smilePaint);
+
+    // 7. رقبة / قاعدة الروبوت
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(w * 0.36, h * 0.74, w * 0.28, h * 0.10),
+        Radius.circular(w * 0.04),
+      ),
+      neckPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _BotChatMessage {
+  final String text;
+  final bool isUser;
+  final DateTime time;
+  final bool showDeveloperCard;
+
+  _BotChatMessage({
+    required this.text,
+    required this.isUser,
+    required this.time,
+    this.showDeveloperCard = false,
+  });
+}
+
+class NebrasBotChatScreen extends StatefulWidget {
+  const NebrasBotChatScreen({super.key});
+
+  @override
+  State<NebrasBotChatScreen> createState() => _NebrasBotChatScreenState();
+}
+
+class _NebrasBotChatScreenState extends State<NebrasBotChatScreen> {
+  final TextEditingController _inputCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
+  final List<_BotChatMessage> _messages = [];
+  bool _isThinking = false;
+
+  static const _quickQuestions = [
+    'كيف أستخدم التطبيق؟',
+    'مراسلة المطور أبو نبراس',
+    'حل مشكلة الكاميرا والباركود',
+    'حل مشكلة البحث الصوتي',
+    'طريقة البيع الآجل والطباعة',
+    'كم مبيعات اليوم والصندوق؟',
+    'أخذ واستعادة نسخة احتياطية',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _messages.add(
+      _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: 'أهلاً بك في مساعد نبراس الذكي 🤖\n\n'
+            'أنا هنا لمساعدتك في:\n'
+            '• شرح طريقة استخدام جميع أقسام التطبيق (المبيعات، المشتريات، المخزون، الصندوق).\n'
+            '• حل أي مشكلة تقنية تواجهك في الكاميرا أو الصوت أو الطابعة.\n'
+            '• الاستعلام السريع عن مبيعات اليوم ورصيد الصندوق والنواقص.\n'
+            '• التواصل المباشر مع المطور م. أحمد البدوي (أبو نبراس).\n\n'
+            'اكتب سؤالك بالأسفل أو اختر من الأزرار السريعة:',
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _inputCtrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          _scrollCtrl.position.maxScrollExtent + 120,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  String _normalizeArabic(String input) {
+    return input
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ة', 'ه')
+        .replaceAll('ى', 'ي')
+        .replaceAll(RegExp(r'[^\w\s\u0600-\u06FF%]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  bool _hasAny(String normalizedText, List keywords) {
+    for (final k in keywords) {
+      if (normalizedText.contains(_normalizeArabic(k.toString()))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _sendMessage([String? presetText]) async {
+    final raw = (presetText ?? _inputCtrl.text).trim();
+    if (raw.isEmpty || _isThinking) return;
+
+    if (presetText == null) {
+      _inputCtrl.clear();
+    }
+
+    setState(() {
+      _messages.add(
+        _BotChatMessage(
+          text: raw,
+          isUser: true,
+          time: DateTime.now(),
+        ),
+      );
+      _isThinking = true;
+    });
+    _scrollToBottom();
+
+    final reply = await _generateSmartReply(raw);
+    if (!mounted) return;
+
+    setState(() {
+      _isThinking = false;
+      _messages.add(reply);
+    });
+    _scrollToBottom();
+  }
+
+  Future<_BotChatMessage> _generateSmartReply(String userQuestion) async {
+    final q = _normalizeArabic(userQuestion);
+
+    // 1. التواصل مع المطور ابو نبراس احمد البدوي
+    if (_hasAny(q, [
+      'مطور',
+      'ابو نبراس',
+      'احمد البدوي',
+      'تواصل',
+      'مراسله',
+      'واتساب',
+      'واتس',
+      'تيليجرام',
+      'تليجرام',
+      'دعم',
+      'تفعيل',
+      'رقم',
+      'صاحب البرنامج',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        showDeveloperCard: true,
+        text: 'يسعدنا تواصلك مع مطور النظام:\n'
+            '👨‍💻 م. أحمد البدوي (أبو نبراس) — فريق نبراس SofT\n\n'
+            'يمكنك مراسلته مباشرة لطلب الدعم الفني، التحديثات، أو تخصيص ميزات إضافية لمتجرك عبر الأزرار بالأسفل:',
+      );
+    }
+
+    // 2. استعلام حي من قاعدة البيانات: مبيعات اليوم / الصندوق / النواقص / الديون
+    if (_hasAny(q, [
+      'كم مبيعات',
+      'مبيعات اليوم',
+      'كم الصندوق',
+      'رصيد الصندوق',
+      'كم في الصندوق',
+      'النواقص',
+      'الاصناف الناقصه',
+      'ديون العملاء',
+      'كم الارباح',
+      'صافي الربح',
+    ])) {
+      final settings = await DatabaseHelper.instance.getSettingsMap();
+      final curr = (settings['currency_symbol'] ?? 'ريال').trim();
+      final todayPrefix = DateTime.now().toIso8601String().split('T').first;
+      final todaySummary = await DatabaseHelper.instance.getFinancialSummary(
+        datePrefix: todayPrefix,
+      );
+      final products = await DatabaseHelper.instance.queryAllProducts();
+
+      int lowCount = 0;
+      final lowNames = [];
+      for (final p in products) {
+        final stock = (p['stock_quantity'] as num?)?.toDouble() ?? 0.0;
+        final minStock = (p['min_stock'] as num?)?.toDouble() ?? 2.0;
+        if (stock <= minStock) {
+          lowCount++;
+          if (lowNames.length < 5) {
+            lowNames.add('• ${p['name']} (المتبقي: $stock)');
+          }
+        }
+      }
+
+      final todaySales = (todaySummary['salesTotal'] ?? 0.0).toStringAsFixed(2);
+      final todayProfit = (todaySummary['netProfit'] ?? 0.0).toStringAsFixed(2);
+      final cashBal = (todaySummary['cashBalance'] ?? 0.0).toStringAsFixed(2);
+      final custDebt = (todaySummary['customersDebt'] ?? 0.0).toStringAsFixed(2);
+      final suppDebt = (todaySummary['suppliersDebt'] ?? 0.0).toStringAsFixed(2);
+
+      final lowSection = lowCount == 0
+          ? '• النواقص: لا توجد أصناف ناقصة حالياً.'
+          : '• الأصناف الناقصة ($lowCount صنف):\n${lowNames.join('\n')}';
+
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '📊 ملخص بيانات متجرك اللحظية من قاعدة البيانات:\n\n'
+            '• مبيعات اليوم: $todaySales $curr\n'
+            '• صافي ربح اليوم: $todayProfit $curr\n'
+            '• الرصيد النقدي في الصندوق: $cashBal $curr\n'
+            '• إجمالي ديون العملاء: $custDebt $curr\n'
+            '• مستحقات الموردين: $suppDebt $curr\n'
+            '$lowSection',
+      );
+    }
+
+    // 3. حل مشكلة الكاميرا وقارئ الباركود
+    if (_hasAny(q, [
+      'كاميرا',
+      'باركود',
+      'مسح',
+      'قراءه الباركود',
+      'لا يمسح',
+      'الكامرا',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '📷 حل مشكلة الكاميرا وقارئ الباركود:\n\n'
+            '1. تأكد من منح إذن الكاميرا للتطبيق: افتح (إعدادات الهاتف ← التطبيقات ← Nebras SofT Pos ← الأذونات ← الكاميرا ← سماح).\n'
+            '2. في الإضاءة الضعيفة، اضغط على أيقونة الفلاش أعلى شاشة المسح.\n'
+            '3. تأكد من عدم وجود تطبيق آخر يستخدم الكاميرا في الخلفية.\n'
+            '4. إذا تعذر المسح لأي سبب، يمكنك الضغط على زر (إدخال يدوي) أسفل شاشة المسح وكتابة الرقم مباشرة.',
+      );
+    }
+
+    // 4. حل مشكلة البحث الصوتي بدون إنترنت
+    if (_hasAny(q, [
+      'صوت',
+      'مايك',
+      'ميكروفون',
+      'بحث صوتي',
+      'بدون انترنت',
+      'لا يسمع',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '🎙️ حل مشكلة البحث الصوتي بدون إنترنت:\n\n'
+            '1. تأكد من السماح بإذن الميكروفون للتطبيق من (إعدادات الهاتف ← الأذونات ← الميكروفون ← سماح).\n'
+            '2. لتشغيل البحث الصوتي بدون إنترنت، افتح تطبيق Google (والإنترنت متصل مرة واحدة) وانتقل إلى:\n'
+            '   صورة الحساب ← الإعدادات ← الصوت ← التعرف على الكلام بلا اتصال بالإنترنت ← الكل ← اختر (العربية) وحمّل الحزمة.\n'
+            '3. بعدها سيعمل البحث الصوتي في شاشة المشتريات بسرعة وبدون إنترنت.',
+      );
+    }
+
+    // 5. حل مشكلة الطابعة الحرارية والفواتير
+    if (_hasAny(q, [
+      'طابعه',
+      'طباعه',
+      'بلوتوث',
+      'ورق',
+      'حراريه',
+      'فاتوره',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '🖨️ حل مشاكل الطباعة الحرارية:\n\n'
+            '1. تأكد من تشغيل البلوتوث في الهاتف واقتران الطابعة الحرارية من إعدادات بلوتوث الهاتف أولاً.\n'
+            '2. ادخل إلى (النسخ الاحتياطي والإعدادات) داخل التطبيق واختر مقاس ورق طابعتك الصحيح (80mm للورق العريض أو 58mm للورق الصغير) ثم اضغط (حفظ الإعدادات).\n'
+            '3. يمكنك إعادة طباعة أي فاتورة سابقة من خلال أيقونة السجل أعلى شاشة المبيعات أو المشتريات.',
+      );
+    }
+
+    // 6. البيع الآجل والعملاء والموردين
+    if (_hasAny(q, [
+      'بيع',
+      'مبيعات',
+      'اجل',
+      'دين',
+      'عميل',
+      'عملاء',
+      'مورد',
+      'سند',
+      'تسعيره',
+      'جمله',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '🛒 طريقة العمل في المبيعات والبيع الآجل:\n\n'
+            '1. اختر مستوى التسعيرة أعلى الشاشة (قطاعي 1 / جملة 2 / خاص 3).\n'
+            '2. أضف الأصناف بالضغط عليها أو بمسح الباركود بالكاميرا، ويمكنك تعديل كمية أو سعر أي صنف بالضغط عليه في الجدول.\n'
+            '3. عند البيع الآجل أو الجزئي: اضغط على أيقونة الشخص أعلى الشاشة لاختيار اسم العميل (أو إضافته)، ثم اختر (آجل) أو (جزئي) عند الحفظ ليُضاف المتبقي لحسابه تلقائياً.\n'
+            '4. لتحصيل دفعة من عميل: افتح (العملاء والموردين) واضغط على أيقونة الدفع بجانب اسمه لتسجيل سند قبض.',
+      );
+    }
+
+    // 7. المخزون، إضافة منتج، وتعديل الأسعار
+    if (_hasAny(q, [
+      'مخزون',
+      'منتج',
+      'صنف',
+      'تصنيف',
+      'تعديل اسعار',
+      'سعر صرف',
+      'صناعه الباركود',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '📦 إدارة المخزون والأسعار والباركود:\n\n'
+            '• إضافة منتج جديد: أدخل الاسم، التكلفة، وأسعار البيع الثلاثة، ويمكنك قراءة الباركود بالكاميرا أو ترك الرقم المولّد تلقائياً.\n'
+            '• عرض المنتجات: يتيح لك البحث بالاسم أو الباركود، طباعة تقرير جرد PDF/Excel، وطباعة ملصقات الباركود للأصناف.\n'
+            '• تعديل أسعار المنتجات: يتيح رفع أو خفض أسعار البيع أو الشراء لجميع المنتجات أو لتصنيف محدد دفعة واحدة (بمبلغ ثابت، نسبة %، أو معامل سعر صرف).',
+      );
+    }
+
+    // 8. النسخ الاحتياطي والاستعادة
+    if (_hasAny(q, [
+      'نسخه',
+      'احتياطي',
+      'استعاده',
+      'حفظ البيانات',
+      'نقل البيانات',
+      'ضاعت',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '💾 النسخ الاحتياطي واستعادة البيانات:\n\n'
+            '1. لحفظ بياناتك: افتح (النسخ الاحتياطي) واضغط على (إنشاء ومشاركة نسخة احتياطية الآن) ثم أرسل الملف إلى واتساب أو تيليجرام أو احفظه في Google Drive.\n'
+            '2. للاستعادة: اضغط على (استعادة البيانات من ملف نسخة احتياطية) واختر الملف الذي ينتهي بصيغة (.db).\n'
+            '⚠️ تنبيه: تأكد من اختيار ملف قاعدة البيانات (.db) الأصلي غير المضغوط.',
+      );
+    }
+
+    // 9. شرح عام لكيفية التعامل مع التطبيق
+    if (_hasAny(q, [
+      'كيف استخدم',
+      'شرح',
+      'بدايه',
+      'تعلم',
+      'كيفيه التعامل',
+      'دليل',
+      'مرحبا',
+      'السلام',
+      'هلا',
+    ])) {
+      return _BotChatMessage(
+        isUser: false,
+        time: DateTime.now(),
+        text: '📘 دليل البدء السريع في نظام Nebras SofT Pos:\n\n'
+            '1️⃣ أضف بيانات متجرك وعملتك من (النسخ الاحتياطي والإعدادات).\n'
+            '2️⃣ سجّل أصنافك وأسعارها من قسم (المخزون ← إضافة منتج جديد)، أو أدخلها عبر فاتورة (المشتريات) لتُضاف للمخزن تلقائياً.\n'
+            '3️⃣ ابدأ البيع من قسم (المبيعات) نقداً أو آجلاً واطبع الفواتير حرارياً.\n'
+            '4️⃣ راقب أرباحك ومصروفاتك من (الصندوق والمصاريف) و(التقارير والأرباح).\n'
+            '5️⃣ احتفظ بنسخة احتياطية دورية لبياناتك.',
+      );
+    }
+
+    // 10. رد ذكي عام عند طرح سؤال غير محدد مع عرض خيار مراسلة المطور
+    return _BotChatMessage(
+      isUser: false,
+      time: DateTime.now(),
+      showDeveloperCard: true,
+      text: 'سؤالك مهم! للحصول على أفضل إجابة، يمكنك كتابة كلمات مفتاحية مثل:\n'
+          '• "مبيعات اليوم" أو "رصيد الصندوق"\n'
+          '• "مشكلة الكاميرا" أو "مشكلة الصوت" أو "الطابعة"\n'
+          '• "البيع الآجل" أو "تعديل الأسعار" أو "النسخ الاحتياطي"\n\n'
+          'أو يمكنك مراسلة المطور م. أحمد البدوي (أبو نبراس) مباشرة للمساعدة الفورية:',
+    );
+  }
+
+  Future<void> _openTelegramDeveloper() async {
+    final uri = Uri.parse('https://t.me/softnebras');
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('معرف المطور على تيليجرام: @softnebras')),
+      );
+    }
+  }
+
+  Future<void> _openWhatsAppDeveloper() async {
+    final msg = Uri.encodeComponent(
+      'السلام عليكم أستاذ أحمد البدوي (أبو نبراس)، أحتاج مساعدة بخصوص تطبيق Nebras SofT Pos.',
+    );
+    final waUri = Uri.parse('whatsapp://send?text=$msg');
+    final webUri = Uri.parse('https://api.whatsapp.com/send?text=$msg');
+    try {
+      if (!await launchUrl(waUri, mode: LaunchMode.externalApplication)) {
+        await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تأكد من تثبيت تطبيق واتساب على الهاتف')),
+      );
+    }
+  }
+
+  Widget _buildDeveloperContactCard() {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F9FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBAE6FD)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: Color(0xFF1545B5),
+                child: Icon(Icons.engineering, color: Colors.white, size: 20),
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'المطور: م. أحمد البدوي (أبو نبراس)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13.5,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    Text(
+                      'نبراس SofT • @softnebras',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF0369A1)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF0284C7),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  onPressed: _openTelegramDeveloper,
+                  icon: const Icon(Icons.send_rounded, size: 17),
+                  label: const Text('تيليجرام', style: TextStyle(fontSize: 13)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  onPressed: _openWhatsAppDeveloper,
+                  icon: const Icon(Icons.chat_rounded, size: 17),
+                  label: const Text('واتساب', style: TextStyle(fontSize: 13)),
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton.outlined(
+                tooltip: 'نسخ معرف تيليجرام',
+                onPressed: () {
+                  Clipboard.setData(const ClipboardData(text: '@softnebras'));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('تم نسخ معرف المطور: @softnebras')),
+                  );
+                },
+                icon: const Icon(Icons.copy, size: 18),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF3F4F6),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF1545B5),
+          foregroundColor: Colors.white,
+          titleSpacing: 4,
+          title: const Row(
+            children: [
+              NebrasRobotAvatar(size: 38),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'مساعد نبراس الذكي',
+                      style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    Text(
+                      'متصل دائماً • شرح النظام والدعم الفني',
+                      style: TextStyle(fontSize: 11.5, color: Color(0xFFBAE6FD)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'مراسلة المطور أبو نبراس',
+              icon: const Icon(Icons.support_agent_rounded, color: Colors.white),
+              onPressed: () => _sendMessage('مراسلة المطور أبو نبراس'),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            // شريط الأسئلة المقترحة السريعة
+            Container(
+              height: 48,
+              color: Colors.white,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                itemCount: _quickQuestions.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 6),
+                itemBuilder: (_, idx) {
+                  final qText = _quickQuestions[idx];
+                  return ActionChip(
+                    backgroundColor: const Color(0xFFEFF6FF),
+                    side: const BorderSide(color: Color(0xFFBFDBFE)),
+                    label: Text(
+                      qText,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1E40AF),
+                      ),
+                    ),
+                    onPressed: () => _sendMessage(qText),
+                  );
+                },
+              ),
+            ),
+            const Divider(height: 1),
+
+            // سجل رسائل المحادثة
+            Expanded(
+              child: ListView.builder(
+                controller: _scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                itemCount: _messages.length + (_isThinking ? 1 : 0),
+                itemBuilder: (_, idx) {
+                  if (_isThinking && idx == _messages.length) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        children: [
+                          NebrasRobotAvatar(size: 32),
+                          SizedBox(width: 8),
+                          Text('الروبوت يجهز الرد...', style: TextStyle(color: Colors.black54, fontSize: 13)),
+                        ],
+                      ),
+                    );
+                  }
+
+                  final msg = _messages[idx];
+                  final timeStr =
+                      '${msg.time.hour.toString().padLeft(2, '0')}:${msg.time.minute.toString().padLeft(2, '0')}';
+
+                  if (msg.isUser) {
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 10, right: 44),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF1545B5),
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(16),
+                            topRight: Radius.circular(16),
+                            bottomRight: Radius.circular(16),
+                            bottomLeft: Radius.circular(4),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              msg.text,
+                              style: const TextStyle(color: Colors.white, fontSize: 14.5, height: 1.4),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              timeStr,
+                              style: const TextStyle(color: Colors.white70, fontSize: 10),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12, left: 26),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const NebrasRobotAvatar(size: 34),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(16),
+                                topRight: Radius.circular(16),
+                                bottomLeft: Radius.circular(16),
+                                bottomRight: Radius.circular(4),
+                              ),
+                              border: Border.all(color: const Color(0xFFE5E7EB)),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x0A000000),
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  msg.text,
+                                  style: const TextStyle(
+                                    color: Color(0xFF1F2937),
+                                    fontSize: 14,
+                                    height: 1.5,
+                                  ),
+                                ),
+                                if (msg.showDeveloperCard) _buildDeveloperContactCard(),
+                                const SizedBox(height: 4),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    timeStr,
+                                    style: const TextStyle(color: Colors.black45, fontSize: 10),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+
+            // شريط كتابة السؤال والإرسال
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: SafeArea(
+                top: false,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _inputCtrl,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _sendMessage(),
+                        decoration: InputDecoration(
+                          hintText: 'اكتب سؤالك هنا (مثلاً: حل مشكلة الكاميرا)...',
+                          hintStyle: const TextStyle(fontSize: 13.5),
+                          isDense: true,
+                          filled: true,
+                          fillColor: const Color(0xFFF3F4F6),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF1545B5),
+                        padding: const EdgeInsets.all(11),
+                      ),
+                      tooltip: 'إرسال',
+                      icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                      onPressed: () => _sendMessage(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
