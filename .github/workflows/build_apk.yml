@@ -85,7 +85,7 @@ jobs:
           if [ -f "flutter_launcher_icons.yaml" ]; then
             dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
           fi
-         flutter build apk --release --no-shrink
+          flutter build apk --release --no-shrink
 
       - uses: actions/upload-artifact@v4
         with:
