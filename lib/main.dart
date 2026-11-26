@@ -10346,8 +10346,52 @@ class _NebrasBotChatScreenState extends State<NebrasBotChatScreen> {
   }
 }
 // =============================================================================
-// بوابة تسجيل الدخول وتنشيط البرنامج (AppStartupGateScreen & ActivationLoginScreen)
+// بوابة تسجيل الدخول وتنشيط البرنامج (مع مفتاح وعلم الدولة والتعرف التلقائي)
 // =============================================================================
+
+class _CountryDialCode {
+  final String name;
+  final String flag;
+  final String dialCode; // بدون علامة + مثل: 967
+
+  const _CountryDialCode({
+    required this.name,
+    required this.flag,
+    required this.dialCode,
+  });
+
+  String get formattedDial => '+$dialCode';
+}
+
+const List<_CountryDialCode> _kSupportedCountries = [
+  _CountryDialCode(name: 'اليمن', flag: '🇾🇪', dialCode: '967'),
+  _CountryDialCode(name: 'السعودية', flag: '🇸🇦', dialCode: '966'),
+  _CountryDialCode(name: 'الإمارات', flag: '🇦🇪', dialCode: '971'),
+  _CountryDialCode(name: 'سلطنة عُمان', flag: '🇴🇲', dialCode: '968'),
+  _CountryDialCode(name: 'قطر', flag: '🇶🇦', dialCode: '974'),
+  _CountryDialCode(name: 'الكويت', flag: '🇰🇼', dialCode: '965'),
+  _CountryDialCode(name: 'البحرين', flag: '🇧🇭', dialCode: '973'),
+  _CountryDialCode(name: 'مصر', flag: '🇪🇬', dialCode: '20'),
+  _CountryDialCode(name: 'الأردن', flag: '🇯🇴', dialCode: '962'),
+  _CountryDialCode(name: 'العراق', flag: '🇮🇶', dialCode: '964'),
+  _CountryDialCode(name: 'سوريا', flag: '🇸🇾', dialCode: '963'),
+  _CountryDialCode(name: 'لبنان', flag: '🇱🇧', dialCode: '961'),
+  _CountryDialCode(name: 'فلسطين', flag: '🇵🇸', dialCode: '970'),
+  _CountryDialCode(name: 'السودان', flag: '🇸🇩', dialCode: '249'),
+  _CountryDialCode(name: 'ليبيا', flag: '🇱🇾', dialCode: '218'),
+  _CountryDialCode(name: 'تونس', flag: '🇹🇳', dialCode: '216'),
+  _CountryDialCode(name: 'الجزائر', flag: '🇩🇿', dialCode: '213'),
+  _CountryDialCode(name: 'المغرب', flag: '🇲🇦', dialCode: '212'),
+  _CountryDialCode(name: 'موريتانيا', flag: '🇲🇷', dialCode: '222'),
+  _CountryDialCode(name: 'الصومال', flag: '🇸🇴', dialCode: '252'),
+  _CountryDialCode(name: 'جيبوتي', flag: '🇩🇯', dialCode: '253'),
+  _CountryDialCode(name: 'تركيا', flag: '🇹🇷', dialCode: '90'),
+  _CountryDialCode(name: 'ماليزيا', flag: '🇲🇾', dialCode: '60'),
+  _CountryDialCode(name: 'إندونيسيا', flag: '🇮🇩', dialCode: '62'),
+  _CountryDialCode(name: 'الهند', flag: '🇮🇳', dialCode: '91'),
+  _CountryDialCode(name: 'الولايات المتحدة', flag: '🇺🇸', dialCode: '1'),
+  _CountryDialCode(name: 'بريطانيا', flag: '🇬🇧', dialCode: '44'),
+];
 
 class LicenseActivationService {
   static const String _secretSalt = 'NEBRAS_SOFT_POS_2026_ABU_NEBRAS';
@@ -10355,16 +10399,26 @@ class LicenseActivationService {
   static Future<String> getOrCreateDeviceId() async {
     final settings = await DatabaseHelper.instance.getSettingsMap();
     final existing = (settings['device_hardware_id'] ?? '').trim();
-    if (existing.isNotEmpty) return existing;
+    if (existing.isNotEmpty && existing.startsWith('NSFP-')) {
+      return existing;
+    }
 
     final raw =
         '${Platform.operatingSystem}_${Platform.localHostname}_${DateTime.now().microsecondsSinceEpoch}';
-    int hash = 5381;
+    int h1 = 0x811C9DC5;
+    int h2 = 0x1545B5;
+    int h3 = 5381;
     for (final unit in raw.codeUnits) {
-      hash = ((hash << 5) + hash + unit) & 0x7FFFFFFF;
+      h1 ^= unit;
+      h1 = (h1 * 0x01000193) & 0xFFFFFFFF;
+      h2 = ((h2 << 5) - h2 + unit) & 0x7FFFFFFF;
+      h3 = ((h3 << 7) ^ (h3 >> 3) ^ unit) & 0x7FFFFFFF;
     }
-    final hexPart = hash.toRadixString(16).toUpperCase().padLeft(8, '0');
-    final deviceId = 'NS-${hexPart.substring(0, 4)}-${hexPart.substring(4, 8)}';
+    final p1 = (h1 & 0xFFFFFF).toRadixString(16).toUpperCase().padLeft(6, '0');
+    final p2 = (h2 & 0xFFFFFF).toRadixString(16).toUpperCase().padLeft(6, '0');
+    final p3 = (h3 & 0xFFFFFF).toRadixString(16).toUpperCase().padLeft(6, '0');
+    final deviceId = 'NSFP-$p1-$p2-$p3';
+
     await DatabaseHelper.instance.saveSetting('device_hardware_id', deviceId);
     return deviceId;
   }
@@ -10434,7 +10488,7 @@ class _AppStartupGateScreenState extends State<AppStartupGateScreen> {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      backgroundColor: Color(0xFF1545B5),
+      backgroundColor: Color(0xFF0D2A7A),
       body: Center(
         child: CircularProgressIndicator(color: Colors.white),
       ),
@@ -10453,8 +10507,13 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
   final TextEditingController _userNameCtrl = TextEditingController();
   final TextEditingController _phoneCtrl = TextEditingController();
   final TextEditingController _keyCtrl = TextEditingController();
+
+  _CountryDialCode _selectedCountry = _kSupportedCountries.first; // اليمن +967 افتراضياً
   String _deviceId = '...';
   bool _activating = false;
+  bool _isParsingPhone = false;
+
+  static const Color _primaryNavy = Color(0xFF0D2A7A);
 
   @override
   void initState() {
@@ -10470,6 +10529,105 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
     super.dispose();
   }
 
+  String _normalizeDigits(String input) {
+    const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+    const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+    final buf = StringBuffer();
+    for (int i = 0; i < input.length; i++) {
+      final ch = input[i];
+      final arIdx = arabicDigits.indexOf(ch);
+      if (arIdx != -1) {
+        buf.write(arIdx);
+        continue;
+      }
+      final faIdx = persianDigits.indexOf(ch);
+      if (faIdx != -1) {
+        buf.write(faIdx);
+        continue;
+      }
+      buf.write(ch);
+    }
+    return buf.toString();
+  }
+
+  void _onPhoneChanged(String rawValue) {
+    if (_isParsingPhone) return;
+
+    final normalized = _normalizeDigits(rawValue);
+    final trimmed = normalized.trim();
+    final hasInternationalPrefix = trimmed.startsWith('+') || trimmed.startsWith('00');
+    String digitsOnly = trimmed.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (digitsOnly.isEmpty) {
+      if (normalized != rawValue) {
+        _isParsingPhone = true;
+        _phoneCtrl.value = const TextEditingValue(text: '');
+        _isParsingPhone = false;
+      }
+      return;
+    }
+
+    // إزالة 00 الدولية إن وجدت
+    if (digitsOnly.startsWith('00')) {
+      digitsOnly = digitsOnly.substring(2);
+    }
+
+    // ترتيب مفاتيح الدول من الأطول للأقصر لتجنب التداخل (مثلاً 967 قبل 96)
+    final sortedCountries = List<_CountryDialCode>.from(_kSupportedCountries)
+      ..sort((a, b) => b.dialCode.length.compareTo(a.dialCode.length));
+
+    _CountryDialCode? detectedCountry;
+    String localNumber = digitsOnly;
+
+    for (final c in sortedCountries) {
+      if (digitsOnly.startsWith(c.dialCode)) {
+        final rest = digitsOnly.substring(c.dialCode.length);
+        // نتأكد أن ما بعد المفتاح يمثل رقماً محلياً فعلياً (أو وجود + / 00 صريحة)
+        if (hasInternationalPrefix ? rest.isNotEmpty : rest.length >= 7) {
+          detectedCountry = c;
+          localNumber = rest.replaceFirst(RegExp(r'^0+'), '');
+          break;
+        }
+      }
+    }
+
+    // التعرف التلقائي على الأرقام اليمنية المحلية (9 أرقام تبدأ بـ 70/71/73/77/78 أو 07...)
+    if (detectedCountry == null) {
+      final noLeadingZero = digitsOnly.replaceFirst(RegExp(r'^0+'), '');
+      if (noLeadingZero.length == 9 &&
+          RegExp(r'^(70|71|73|77|78)\d{7}$').hasMatch(noLeadingZero)) {
+        detectedCountry = _kSupportedCountries.first; // اليمن 967
+        localNumber = noLeadingZero;
+      } else if (digitsOnly.startsWith('05') && digitsOnly.length == 10) {
+        // رقم سعودي أو إماراتي محلي يبدأ بـ 05
+        localNumber = noLeadingZero;
+      }
+    }
+
+    if (detectedCountry != null && detectedCountry.dialCode != _selectedCountry.dialCode) {
+      setState(() {
+        _selectedCountry = detectedCountry!;
+      });
+    }
+
+    if (localNumber != rawValue) {
+      _isParsingPhone = true;
+      _phoneCtrl.value = TextEditingValue(
+        text: localNumber,
+        selection: TextSelection.collapsed(offset: localNumber.length),
+      );
+      _isParsingPhone = false;
+    }
+  }
+
+  String get _fullInternationalPhone {
+    final local = _normalizeDigits(_phoneCtrl.text)
+        .replaceAll(RegExp(r'[^0-9]'), '')
+        .replaceFirst(RegExp(r'^0+'), '');
+    if (local.isEmpty) return '';
+    return '${_selectedCountry.formattedDial} $local';
+  }
+
   Future<void> _initDeviceInfo() async {
     final id = await LicenseActivationService.getOrCreateDeviceId();
     final settings = await DatabaseHelper.instance.getSettingsMap();
@@ -10480,33 +10638,165 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
       if (store.isNotEmpty && store != 'نبراس SofT') {
         _userNameCtrl.text = store;
       }
-      final phone = (settings['store_phone'] ?? '').trim();
-      if (phone.isNotEmpty) {
-        _phoneCtrl.text = phone;
+      final savedPhone = (settings['store_phone'] ?? '').trim();
+      if (savedPhone.isNotEmpty) {
+        _onPhoneChanged(savedPhone);
+        if (_phoneCtrl.text.isEmpty) {
+          _phoneCtrl.text = savedPhone;
+        }
       }
     });
   }
 
+  Future<void> _openCountryPickerDialog() async {
+    String searchQuery = '';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final filtered = _kSupportedCountries.where((c) {
+            if (searchQuery.trim().isEmpty) return true;
+            final q = searchQuery.trim().toLowerCase();
+            return c.name.toLowerCase().contains(q) ||
+                c.dialCode.contains(q) ||
+                c.formattedDial.contains(q);
+          }).toList();
+
+          return Directionality(
+            textDirection: TextDirection.rtl,
+            child: AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.white,
+              title: const Text(
+                'اختر الدولة ومفتاح الاتصال',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16.5),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 360,
+                child: Column(
+                  children: [
+                    TextField(
+                      onChanged: (v) => setDialogState(() => searchQuery = v),
+                      decoration: InputDecoration(
+                        hintText: 'ابحث باسم الدولة أو المفتاح (مثلاً: 967)...',
+                        prefixIcon: const Icon(Icons.search, size: 20),
+                        isDense: true,
+                        filled: true,
+                        fillColor: const Color(0xFFF3F4F6),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, idx) {
+                          final country = filtered[idx];
+                          final isSelected = country.dialCode == _selectedCountry.dialCode;
+                          return ListTile(
+                            dense: true,
+                            leading: Text(
+                              country.flag,
+                              style: const TextStyle(fontSize: 24),
+                            ),
+                            title: Text(
+                              country.name,
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14.5),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Directionality(
+                                  textDirection: TextDirection.ltr,
+                                  child: Text(
+                                    country.formattedDial,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      color: _primaryNavy,
+                                    ),
+                                  ),
+                                ),
+                                if (isSelected) ...[
+                                  const SizedBox(width: 6),
+                                  const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 19),
+                                ],
+                              ],
+                            ),
+                            onTap: () {
+                              setState(() => _selectedCountry = country);
+                              Navigator.of(ctx).pop();
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _sendToDeveloperWhatsApp() async {
+    final name = _userNameCtrl.text.trim();
+    final fullPhone = _fullInternationalPhone;
+    if (name.isEmpty || fullPhone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFDC2626),
+          content: Text('يرجى كتابة الاسم ورقم الهاتف أولاً قبل إرسال الطلب للمطور.'),
+        ),
+      );
+      return;
+    }
+
+    final message = 'السلام عليكم أستاذ أحمد البدوي (أبو نبراس)، أرغب بتفعيل تطبيق Nebras SofT Pos.\n'
+        '• الاسم الكامل: $name\n'
+        '• الدولة: ${_selectedCountry.flag} ${_selectedCountry.name}\n'
+        '• رقم الهاتف: $fullPhone\n'
+        '• بصمة الجهاز (Device ID): $_deviceId';
+
+    final encoded = Uri.encodeComponent(message);
+    final waUri = Uri.parse('whatsapp://send?phone=967735114406&text=$encoded');
+    final webUri = Uri.parse('https://api.whatsapp.com/send?phone=967735114406&text=$encoded');
+
+    try {
+      if (!await launchUrl(waUri, mode: LaunchMode.externalApplication)) {
+        await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذر فتح تطبيق واتساب، تأكد من تثبيته على الهاتف')),
+      );
+    }
+  }
+
   Future<void> _submitActivation() async {
     final name = _userNameCtrl.text.trim();
-    final phone = _phoneCtrl.text.trim();
-    final key = _keyCtrl.text.trim();
+    final fullPhone = _fullInternationalPhone;
+    final serial = _keyCtrl.text.trim();
 
-    if (name.isEmpty) {
+    if (name.isEmpty || fullPhone.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى إدخال اسمك أو اسم المتجر أولاً')),
+        const SnackBar(
+          backgroundColor: Color(0xFFDC2626),
+          content: Text('يرجى كتابة الاسم ورقم الهاتف أولاً قبل إرسال الطلب للمطور.'),
+        ),
       );
       return;
     }
 
-    if (phone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى إدخال رقم الهاتف أولاً')),
-      );
-      return;
-    }
-
-    if (key.isEmpty) {
+    if (serial.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('يرجى إدخال سريال التنشيط أولاً')),
       );
@@ -10514,13 +10804,13 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
     }
 
     setState(() => _activating = true);
-    final ok = await LicenseActivationService.activateWithKey(key);
+    final isValid = await LicenseActivationService.activateWithKey(serial);
     if (!mounted) return;
     setState(() => _activating = false);
 
-    if (ok) {
+    if (isValid) {
       await DatabaseHelper.instance.saveSetting('store_name', name);
-      await DatabaseHelper.instance.saveSetting('store_phone', phone);
+      await DatabaseHelper.instance.saveSetting('store_phone', fullPhone);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const HomeDashboardScreen()),
@@ -10529,57 +10819,39 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Color(0xFFDC2626),
-          content: Text('سريال التنشيط غير صحيح لمعرّف الجهاز هذا، تواصل مع المطور أبو نبراس'),
+          content: Text('سريال التنشيط غير صحيح لبصمة الجهاز هذه، يرجى التأكد أو مراسلة المطور'),
         ),
       );
     }
   }
 
-  String _buildActivationRequestMessage() {
-    final name = _userNameCtrl.text.trim();
-    final phone = _phoneCtrl.text.trim();
-    return 'السلام عليكم أستاذ أحمد البدوي (أبو نبراس)، أرغب بتوليد سريال تنشيط لتطبيق Nebras SofT Pos.\n'
-        '• الاسم: ${name.isNotEmpty ? name : 'غير محدد'}\n'
-        '• رقم الهاتف: ${phone.isNotEmpty ? phone : 'غير محدد'}\n'
-        '• معرّف الجهاز: $_deviceId';
-  }
-
-  Future<void> _sendDeviceIdToDeveloperWhatsApp() async {
-    final name = _userNameCtrl.text.trim();
-    final phone = _phoneCtrl.text.trim();
-    if (name.isEmpty || phone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('يرجى كتابة الاسم ورقم الهاتف أولاً لإرسالهما مع معرّف الجهاز'),
-        ),
-      );
-      return;
-    }
-
-    final text = Uri.encodeComponent(_buildActivationRequestMessage());
-    final waUri = Uri.parse('whatsapp://send?phone=967735114406&text=$text');
-    final webUri = Uri.parse('https://api.whatsapp.com/send?phone=967735114406&text=$text');
-    try {
-      if (!await launchUrl(waUri, mode: LaunchMode.externalApplication)) {
-        await launchUrl(webUri, mode: LaunchMode.externalApplication);
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _sendDeviceIdToDeveloperTelegram() async {
-    final fullMsg = _buildActivationRequestMessage();
-    await Clipboard.setData(ClipboardData(text: fullMsg));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تم نسخ الاسم ورقم الهاتف ومعرّف الجهاز — الصق الرسالة في محادثة المطور'),
-        ),
-      );
-    }
-    final uri = Uri.parse('https://t.me/softnebras');
-    try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
+  InputDecoration _fieldDecoration({
+    required String label,
+    required IconData icon,
+    String? helperText,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      helperText: helperText,
+      helperStyle: const TextStyle(
+        color: Color(0xFF047857),
+        fontWeight: FontWeight.w600,
+        fontSize: 12,
+      ),
+      labelStyle: const TextStyle(color: Color(0xFF4B5563), fontSize: 15),
+      prefixIcon: Icon(icon, color: const Color(0xFF4B5563), size: 22),
+      filled: true,
+      fillColor: const Color(0xFFF3F4F6),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: Color(0xFF9CA3AF), width: 1.1),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _primaryNavy, width: 1.8),
+      ),
+    );
   }
 
   @override
@@ -10587,193 +10859,307 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF3F4F6),
+        backgroundColor: const Color(0xFFECEFF3),
+        appBar: AppBar(
+          backgroundColor: _primaryNavy,
+          foregroundColor: Colors.white,
+          centerTitle: true,
+          elevation: 0,
+          automaticallyImplyLeading: false,
+          title: const Text(
+            'تسجيل الدخول وتفعيل التطبيق',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ),
         body: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(18),
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: const Color(0xFFE5E7EB)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x14000000),
-                      blurRadius: 10,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 72,
-                        height: 72,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1545B5),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: const Icon(
-                          Icons.verified_user_rounded,
-                          color: Colors.white,
-                          size: 40,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // =============================================================
+                // البطاقة الأولى: بيانات المستخدم + مفتاح وعلم الدولة + بصمة الجهاز
+                // =============================================================
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7F8FA),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x0D000000),
+                        blurRadius: 8,
+                        offset: Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'بيانات المستخدم',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 16.5,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1F2937),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Nebras SofT Pos',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1545B5),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'تسجيل الدخول وتنشيط نسخة البرنامج',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 14, color: Colors.black54),
-                    ),
-                    const SizedBox(height: 18),
+                      const SizedBox(height: 12),
 
-                    // مربع معرّف الجهاز
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEFF6FF),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFBFDBFE)),
+                      // حقل الاسم الكامل *
+                      TextField(
+                        controller: _userNameCtrl,
+                        textInputAction: TextInputAction.next,
+                        decoration: _fieldDecoration(
+                          label: 'الاسم الكامل *',
+                          icon: Icons.person_outline_rounded,
+                        ),
                       ),
-                      child: Column(
+                      const SizedBox(height: 12),
+
+                      // صف رقم الهاتف + مفتاح وشعار (علم) الدولة
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'معرّف الجهاز الخاص بك:',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF1E3A8A),
+                          Expanded(
+                            child: TextField(
+                              controller: _phoneCtrl,
+                              keyboardType: TextInputType.phone,
+                              textInputAction: TextInputAction.next,
+                              onChanged: _onPhoneChanged,
+                              decoration: _fieldDecoration(
+                                label: 'رقم الهاتف *',
+                                icon: Icons.smartphone_rounded,
+                                helperText: 'الدولة: ${_selectedCountry.flag} ${_selectedCountry.name}',
+                              ),
                             ),
                           ),
-                          const SizedBox(height: 6),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SelectableText(
-                                _deviceId,
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1.2,
-                                  color: Color(0xFF0F172A),
-                                ),
+                          const SizedBox(width: 8),
+                          InkWell(
+                            onTap: _openCountryPickerDialog,
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              height: 54,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF3F4F6),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: const Color(0xFF9CA3AF), width: 1.1),
                               ),
-                              const SizedBox(width: 8),
-                              IconButton(
-                                tooltip: 'نسخ معرّف الجهاز',
-                                icon: const Icon(Icons.copy, size: 20, color: Color(0xFF1545B5)),
-                                onPressed: () {
-                                  Clipboard.setData(ClipboardData(text: _deviceId));
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('تم نسخ معرّف الجهاز')),
-                                  );
-                                },
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    _selectedCountry.flag,
+                                    style: const TextStyle(fontSize: 22),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Directionality(
+                                    textDirection: TextDirection.ltr,
+                                    child: Text(
+                                      _selectedCountry.formattedDial,
+                                      style: const TextStyle(
+                                        fontSize: 14.5,
+                                        fontWeight: FontWeight.bold,
+                                        color: _primaryNavy,
+                                      ),
+                                    ),
+                                  ),
+                                  const Icon(
+                                    Icons.arrow_drop_down_rounded,
+                                    color: Color(0xFF4B5563),
+                                    size: 22,
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 14),
+                      const SizedBox(height: 16),
 
-                    TextField(
-                      controller: _userNameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'الاسم الكامل / اسم المتجر *',
-                        prefixIcon: Icon(Icons.person_outline),
-                        border: OutlineInputBorder(),
+                      // عنوان بصمة الجهاز (Device ID)
+                      const Text(
+                        'بصمة الجهاز (Device ID)',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1F2937),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 10),
 
-                    TextField(
-                      controller: _phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      decoration: const InputDecoration(
-                        labelText: 'رقم الهاتف *',
-                        prefixIcon: Icon(Icons.phone_android_outlined),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    TextField(
-                      controller: _keyCtrl,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.1,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'سريال التنشيط (XXXX-XXXX-XXXX)',
-                        prefixIcon: Icon(Icons.vpn_key_outlined),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF16A34A),
-                        padding: const EdgeInsets.symmetric(vertical: 13),
-                      ),
-                      onPressed: _activating ? null : _submitActivation,
-                      icon: const Icon(Icons.check_circle_outline),
-                      label: Text(
-                        _activating ? 'جاري التحقق...' : 'تنشيط ودخول البرنامج',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Divider(),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'أدخل اسمك ورقم هاتفك ثم اضغط على واتساب لإرسال بياناتك ومعرّف الجهاز للمطور م. أحمد البدوي (أبو نبراس) لتوليد سريال التنشيط:',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.4),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF16A34A),
+                      // صندوق بصمة الجهاز مع زر النسخ
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3F4F6),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFD1D5DB)),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: SelectableText(
+                                _deviceId,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.6,
+                                  color: Color(0xFF111827),
+                                ),
+                              ),
                             ),
-                            onPressed: _sendDeviceIdToDeveloperWhatsApp,
-                            icon: const Icon(Icons.chat_outlined, size: 18),
-                            label: const Text('إرسال عبر واتساب'),
+                            InkWell(
+                              onTap: () {
+                                Clipboard.setData(ClipboardData(text: _deviceId));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('تم نسخ بصمة الجهاز')),
+                                );
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(
+                                  Icons.copy_rounded,
+                                  color: _primaryNavy,
+                                  size: 23,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // زر إرسال البيانات وبصمة الجهاز واتساب للمطور
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF7F8FA),
+                          foregroundColor: const Color(0xFF047857),
+                          side: const BorderSide(color: Color(0xFF9CA3AF), width: 1),
+                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(28),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _sendDeviceIdToDeveloperTelegram,
-                            icon: const Icon(Icons.send_outlined, color: Color(0xFF0284C7), size: 18),
-                            label: const Text('تيليجرام'),
+                        onPressed: _sendToDeveloperWhatsApp,
+                        icon: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF16A34A),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Icon(
+                            Icons.chat_bubble_outline_rounded,
+                            color: Colors.white,
+                            size: 14,
                           ),
                         ),
-                      ],
-                    ),
-                  ],
+                        label: const Text(
+                          'إرسال البيانات وبصمة الجهاز واتساب للمطور',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF065F46),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+
+                const SizedBox(height: 16),
+
+                // =============================================================
+                // البطاقة الثانية: إدخال سريال التنشيط + زر التفعيل والدخول
+                // =============================================================
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7F8FA),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x0D000000),
+                        blurRadius: 8,
+                        offset: Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'إدخال سريال التنشيط الخاص بالجهاز',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // حقل سريال التنشيط *
+                      TextField(
+                        controller: _keyCtrl,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _submitActivation(),
+                        decoration: _fieldDecoration(
+                          label: 'سريال التنشيط *',
+                          icon: Icons.vpn_key_outlined,
+                        ),
+                      ),
+
+                      const SizedBox(height: 10),
+                      const Text(
+                        'يرجى كتابة الاسم ورقم الهاتف أولاً قبل إرسال الطلب للمطور.',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFFB91C1C),
+                          height: 1.4,
+                        ),
+                      ),
+
+                      const SizedBox(height: 18),
+
+                      // زر تفعيل ودخول التطبيق
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _primaryNavy,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                        ),
+                        onPressed: _activating ? null : _submitActivation,
+                        icon: const Icon(Icons.verified_user_rounded, size: 22),
+                        label: Text(
+                          _activating ? 'جاري التحقق...' : 'تفعيل ودخول التطبيق',
+                          style: const TextStyle(
+                            fontSize: 16.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
