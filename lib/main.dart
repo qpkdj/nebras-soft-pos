@@ -80,7 +80,12 @@ class _NebrasPosAppState extends State<NebrasPosApp> {
           elevation: 0.5,
         ),
       ),
-      home: const AppStartupGateScreen(),
+      home: const Stack(
+        children: [
+          AppStartupGateScreen(),
+          FloatingDraggableBotButton(),
+        ],
+      ),
     );
   }
 }
