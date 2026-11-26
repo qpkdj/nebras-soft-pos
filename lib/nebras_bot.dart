@@ -42,7 +42,17 @@ class NebrasSmartBotEngine {
   static final List<_BotIntent> _knowledgeBase = [
     _BotIntent(
       id: 'welcome',
-      keywords: ['مرحبا', 'السلام', 'هلا', 'اهلا', 'صباح', 'مساء', 'بدايه', 'مساعده', 'من انت'],
+      keywords: [
+        'مرحبا',
+        'السلام',
+        'هلا',
+        'اهلا',
+        'صباح',
+        'مساء',
+        'بدايه',
+        'مساعده',
+        'من انت'
+      ],
       answer:
           'أهلاً بك في المساعد الذكي لنظام نبراس SofT المحاسبي (Nebras SofT Pos) 👋\n\n'
           'أنا هنا لمساعدتك خطوة بخطوة في:\n'
@@ -51,37 +61,81 @@ class NebrasSmartBotEngine {
           '• حسابات العملاء والموردين وسندات القبض والصرف\n'
           '• الطباعة الحرارية والنسخ الاحتياطي والتفعيل\n\n'
           'اكتب سؤالك مباشرة أو اختر من المواضيع بالأسفل:',
-      followUps: ['كيف أبدأ البيع؟', 'إضافة منتج وباركود', 'إعداد الطابعة الحرارية', 'النسخ الاحتياطي'],
+      followUps: [
+        'كيف أبدأ البيع؟',
+        'إضافة منتج وباركود',
+        'إعداد الطابعة الحرارية',
+        'النسخ الاحتياطي'
+      ],
     ),
     _BotIntent(
       id: 'pos_sales',
-      keywords: ['بيع', 'مبيعات', 'فاتوره', 'كاشير', 'نقطه البيع', 'سله', 'خصم', 'مرتجع', 'ارجاع'],
-      answer:
-          '🛒 دليل نقطة البيع والمبيعات السريعة:\n\n'
+      keywords: [
+        'بيع',
+        'مبيعات',
+        'فاتوره',
+        'كاشير',
+        'نقطه البيع',
+        'سله',
+        'خصم',
+        'مرتجع',
+        'ارجاع'
+      ],
+      answer: '🛒 دليل نقطة البيع والمبيعات السريعة:\n\n'
           '1. إضافة الأصناف: امسح الباركود بالكاميرا أو قارئ الباركود، أو ابحث باسم الصنف في شريط البحث.\n'
           '2. تعديل الكمية والسعر: اضغط على الصنف داخل السلة لزيادة الكمية أو تطبيق خصم مباشر.\n'
           '3. الدفع النقدي والآجل:\n'
           '   • نقدي: اضغط "إتمام البيع" ليتم ترحيل المبلغ للصندوق فوراً.\n'
           '   • آجل (دين): اختر اسم العميل أولاً ثم اختر نوع الدفع "آجل" ليُقيد المبلغ تلقائياً في كشف حسابه.\n'
           '4. المرتجعات: من سجل الفواتير، افتح الفاتورة واختر "مرتجع" لإعادة الكمية للمخزون وتعديل الصندوق تلقائياً.',
-      followUps: ['كيف أطبع الفاتورة؟', 'حسابات العملاء والديون', 'تقرير أرباح اليوم'],
+      followUps: [
+        'كيف أطبع الفاتورة؟',
+        'حسابات العملاء والديون',
+        'تقرير أرباح اليوم'
+      ],
     ),
     _BotIntent(
       id: 'inventory_barcode',
-      keywords: ['مخزون', 'منتج', 'صنف', 'اصناف', 'باركود', 'جرد', 'نواقص', 'كميه', 'تكلفه', 'سعر الشراء'],
-      answer:
-          '📦 إدارة المخزون والباركود:\n\n'
+      keywords: [
+        'مخزون',
+        'منتج',
+        'صنف',
+        'اصناف',
+        'باركود',
+        'جرد',
+        'نواقص',
+        'كميه',
+        'تكلفه',
+        'سعر الشراء'
+      ],
+      answer: '📦 إدارة المخزون والباركود:\n\n'
           '• إضافة صنف جديد: أدخل اسم الصنف، سعر الشراء (التكلفة)، سعر البيع، والكمية الحالية.\n'
           '• توليد باركود تلقائي: إذا لم يكن للمنتج باركود، اضغط زر "توليد باركود" ليقوم النظام بإنشاء كود فريد جاهز للطباعة واللصق.\n'
           '• تنبيهات النواقص: حدد "الحد الأدنى للطلب" لكل صنف، وسيقوم النظام بتنبيهك تلقائياً قبل نفاد الكمية.\n'
           '• دقة الأرباح: احرص دائماً على إدخال "سعر الشراء" بدقة لأن النظام يحسب صافي الربح بناءً على الفرق بين سعر البيع وسعر التكلفة.',
-      followUps: ['كيف أبدأ البيع؟', 'إعداد الطابعة الحرارية', 'التقارير والأرباح'],
+      followUps: [
+        'كيف أبدأ البيع؟',
+        'إعداد الطابعة الحرارية',
+        'التقارير والأرباح'
+      ],
     ),
     _BotIntent(
       id: 'customers_suppliers',
-      keywords: ['عميل', 'عملاء', 'مورد', 'موردين', 'دين', 'ديون', 'اجل', 'سند', 'قبض', 'صرف', 'كشف حساب', 'متبقي'],
-      answer:
-          '📒 حسابات العملاء والموردين (الديون والآجل):\n\n'
+      keywords: [
+        'عميل',
+        'عملاء',
+        'مورد',
+        'موردين',
+        'دين',
+        'ديون',
+        'اجل',
+        'سند',
+        'قبض',
+        'صرف',
+        'كشف حساب',
+        'متبقي'
+      ],
+      answer: '📒 حسابات العملاء والموردين (الديون والآجل):\n\n'
           '• تسجيل دفعة من عميل (سند قبض): افتح ملف العميل واضغط "تسديد / سند قبض"، أدخل المبلغ المستلم وسيتم خصمه من دينه وإضافته للصندوق فوراً.\n'
           '• دفع مبلغ لمورد (سند صرف): من قائمة الموردين، اختر المورد وسجّل الدفعة ليتم خصمها من رصيده.\n'
           '• كشف حساب تفصيلي: يمكنك استعراض جميع فواتير ودفعات أي عميل أو مورد بالتاريخ والوقت، ومشاركته كملف PDF عبر واتساب بضغطة زر.',
@@ -89,9 +143,18 @@ class NebrasSmartBotEngine {
     ),
     _BotIntent(
       id: 'thermal_printing',
-      keywords: ['طابعه', 'طباعه', 'بلوتوث', 'حراريه', 'ورق', 'ايصال', 'فاتوره pdf', 'لا تطبع', 'مشكله الطباعه'],
-      answer:
-          '🖨️ إعداد وحل مشاكل الطباعة الحرارية:\n\n'
+      keywords: [
+        'طابعه',
+        'طباعه',
+        'بلوتوث',
+        'حراريه',
+        'ورق',
+        'ايصال',
+        'فاتوره pdf',
+        'لا تطبع',
+        'مشكله الطباعه'
+      ],
+      answer: '🖨️ إعداد وحل مشاكل الطباعة الحرارية:\n\n'
           '1. تأكد من تشغيل البلوتوث والموقع (GPS) في هاتفك (مطلوب في أندرويد للبحث عن الطابعات).\n'
           '2. قم بإقران الطابعة أولاً من إعدادات البلوتوث في الهاتف (الرمز الافتراضي غالباً 0000 أو 1234).\n'
           '3. افتح إعدادات الطباعة داخل التطبيق واختر الطابعة ومقاس الورق (58mm أو 80mm).\n'
@@ -100,19 +163,44 @@ class NebrasSmartBotEngine {
     ),
     _BotIntent(
       id: 'backup_restore',
-      keywords: ['نسخ', 'احتياطي', 'نسخه', 'استعاده', 'فرمته', 'نقل', 'حفظ البيانات', 'ضياع', 'سحابي', 'جوجل درايف'],
-      answer:
-          '☁️ النسخ الاحتياطي وحماية بياناتك:\n\n'
+      keywords: [
+        'نسخ',
+        'احتياطي',
+        'نسخه',
+        'استعاده',
+        'فرمته',
+        'نقل',
+        'حفظ البيانات',
+        'ضياع',
+        'سحابي',
+        'جوجل درايف'
+      ],
+      answer: '☁️ النسخ الاحتياطي وحماية بياناتك:\n\n'
           '• النسخ المحلي: من قسم "النسخ الاحتياطي"، اضغط "إنشاء نسخة احتياطية" لحفظ قاعدة البيانات كاملة في ذاكرة الجهاز.\n'
           '• المشاركة الآمنة: ننصح يومياً بعد إغلاق المحل بمشاركة ملف النسخة الاحتياطية إلى حسابك الشخصي في واتساب أو تيليجرام أو Google Drive.\n'
           '• استعادة البيانات: عند تغيير الهاتف أو الفرمتة، ثبّت التطبيق واختر "استعادة نسخة احتياطية" وحدد آخر ملف قمت بحفظه لتعود جميع الأصناف والديون والفواتير كما كانت.',
-      followUps: ['التفعيل والسريال', 'التقارير والأرباح', 'التواصل مع الدعم الفني'],
+      followUps: [
+        'التفعيل والسريال',
+        'التقارير والأرباح',
+        'التواصل مع الدعم الفني'
+      ],
     ),
     _BotIntent(
       id: 'reports_profits',
-      keywords: ['تقرير', 'تقارير', 'ربح', 'ارباح', 'خساره', 'مصروف', 'مصروفات', 'صندوق', 'يومي', 'شهري', 'احصائيات'],
-      answer:
-          '📊 التقارير المالية والأرباح:\n\n'
+      keywords: [
+        'تقرير',
+        'تقارير',
+        'ربح',
+        'ارباح',
+        'خساره',
+        'مصروف',
+        'مصروفات',
+        'صندوق',
+        'يومي',
+        'شهري',
+        'احصائيات'
+      ],
+      answer: '📊 التقارير المالية والأرباح:\n\n'
           '• ملخص اليوم / الفترة: يعرض إجمالي المبيعات (النقدي + الآجل)، إجمالي التكلفة، والمصروفات التشغيلية.\n'
           '• صافي الربح الحقيقي: يُحسب تلقائياً بالمعادلة:\n'
           '  (إجمالي المبيعات - تكلفة البضاعة المباعة) - المصروفات.\n'
@@ -121,9 +209,20 @@ class NebrasSmartBotEngine {
     ),
     _BotIntent(
       id: 'activation_license',
-      keywords: ['تفعيل', 'سريال', 'مفتاح', 'ترخيص', 'بصمه', 'معرف الجهاز', 'nsfp', 'nsact', 'انتهى', 'اشتراك', 'تجديد'],
-      answer:
-          '🔐 نظام التفعيل والترخيص (Ed25519):\n\n'
+      keywords: [
+        'تفعيل',
+        'سريال',
+        'مفتاح',
+        'ترخيص',
+        'بصمه',
+        'معرف الجهاز',
+        'nsfp',
+        'nsact',
+        'انتهى',
+        'اشتراك',
+        'تجديد'
+      ],
+      answer: '🔐 نظام التفعيل والترخيص (Ed25519):\n\n'
           '• يرتبط التفعيل ببصمة جهازك الفريدة (NSFP-...) لضمان أمان نسختك.\n'
           '• لتفعيل التطبيق أو تجديد الاشتراك:\n'
           '  1. انسخ معرّف جهازك من شاشة التفعيل.\n'
@@ -134,14 +233,29 @@ class NebrasSmartBotEngine {
     ),
     _BotIntent(
       id: 'support_contact',
-      keywords: ['دعم', 'تواصل', 'مطور', 'واتساب', 'تيليجرام', 'رقم', 'مشكله', 'خطا', 'عطل', 'ابو نبراس', 'نبراس'],
-      answer:
-          '📞 الدعم الفني والتواصل المباشر مع المطور:\n\n'
+      keywords: [
+        'دعم',
+        'تواصل',
+        'مطور',
+        'واتساب',
+        'تيليجرام',
+        'رقم',
+        'مشكله',
+        'خطا',
+        'عطل',
+        'ابو نبراس',
+        'نبراس'
+      ],
+      answer: '📞 الدعم الفني والتواصل المباشر مع المطور:\n\n'
           '• المطور: م. أبو نبراس أحمد البدوي (فريق نبراس SofT)\n'
           '• واتساب: 735114406\n'
           '• تيليجرام: @softnebras\n\n'
           'عند التواصل بخصوص مشكلة تقنية، يُفضل إرسال لقطة شاشة للخطأ مع ذكر نوع الجهاز لتقديم الحل بشكل أسرع.',
-      followUps: ['التفعيل والسريال', 'النسخ الاحتياطي', 'إعداد الطابعة الحرارية'],
+      followUps: [
+        'التفعيل والسريال',
+        'النسخ الاحتياطي',
+        'إعداد الطابعة الحرارية'
+      ],
     ),
   ];
 
@@ -150,7 +264,12 @@ class NebrasSmartBotEngine {
     if (normalized.isEmpty) {
       return const BotReply(
         text: 'يرجى كتابة سؤالك أو اختيار موضوع من الاقتراحات بالأسفل.',
-        suggestions: ['كيف أبدأ البيع؟', 'إضافة منتج وباركود', 'إعداد الطابعة الحرارية', 'التواصل مع الدعم الفني'],
+        suggestions: [
+          'كيف أبدأ البيع؟',
+          'إضافة منتج وباركود',
+          'إعداد الطابعة الحرارية',
+          'التواصل مع الدعم الفني'
+        ],
       );
     }
 
@@ -181,8 +300,7 @@ class NebrasSmartBotEngine {
     }
 
     return const BotReply(
-      text:
-          'لم أتمكن من تحديد قصدك بدقة 🤔\n\n'
+      text: 'لم أتمكن من تحديد قصدك بدقة 🤔\n\n'
           'يمكنك سؤالي عن أي موضوع يتعلق بالنظام مثل: المبيعات، المخزون، الباركود، الديون، الطباعة الحرارية، الأرباح، النسخ الاحتياطي، أو التفعيل.\n'
           'أو اختر أحد المواضيع الجاهزة بالأسفل:',
       suggestions: [
@@ -196,17 +314,22 @@ class NebrasSmartBotEngine {
   }
 }
 
-/// زر البوت العائم المتحرك بالسحب في أي مكان على الشاشة
+/// زر البوت العائم المتحرك بالسحب مع الالتصاق التلقائي بأقرب حافة
 class FloatingDraggableBotButton extends StatefulWidget {
   const FloatingDraggableBotButton({super.key});
 
   @override
-  State<FloatingDraggableBotButton> createState() => _FloatingDraggableBotButtonState();
+  State<FloatingDraggableBotButton> createState() =>
+      _FloatingDraggableBotButtonState();
 }
 
-class _FloatingDraggableBotButtonState extends State<FloatingDraggableBotButton> {
+class _FloatingDraggableBotButtonState
+    extends State<FloatingDraggableBotButton> {
   static const double _buttonSize = 58.0;
+  static const double _edgeMargin = 8.0;
+
   Offset? _position;
+  bool _isDragging = false;
 
   void _openBotChat(BuildContext context) {
     showModalBottomSheet(
@@ -215,6 +338,20 @@ class _FloatingDraggableBotButtonState extends State<FloatingDraggableBotButton>
       backgroundColor: Colors.transparent,
       builder: (_) => const _NebrasBotChatSheet(),
     );
+  }
+
+  void _snapToNearestEdge(Size screenSize) {
+    if (_position == null) return;
+    final centerX = _position!.dx + (_buttonSize / 2);
+    final snapToLeft = centerX < (screenSize.width / 2);
+    final targetX = snapToLeft
+        ? _edgeMargin
+        : (screenSize.width - _buttonSize - _edgeMargin);
+
+    setState(() {
+      _isDragging = false;
+      _position = Offset(targetX, _position!.dy);
+    });
   }
 
   @override
@@ -226,23 +363,35 @@ class _FloatingDraggableBotButtonState extends State<FloatingDraggableBotButton>
 
     // الموضع الافتراضي عند أول تشغيل (أسفل يسار الشاشة)
     _position ??= Offset(
-      16,
+      _edgeMargin,
       screenSize.height - _buttonSize - bottomPadding - 70,
     );
 
-    return Positioned(
+    return AnimatedPositioned(
+      duration:
+          _isDragging ? Duration.zero : const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
       left: _position!.dx,
       top: _position!.dy,
       child: GestureDetector(
+        onPanStart: (_) {
+          setState(() => _isDragging = true);
+        },
         onPanUpdate: (details) {
           setState(() {
-            final newX = (_position!.dx + details.delta.dx)
-                .clamp(8.0, screenSize.width - _buttonSize - 8.0);
-            final newY = (_position!.dy + details.delta.dy)
-                .clamp(topPadding, screenSize.height - _buttonSize - bottomPadding);
+            final newX = (_position!.dx + details.delta.dx).clamp(
+              _edgeMargin,
+              screenSize.width - _buttonSize - _edgeMargin,
+            );
+            final newY = (_position!.dy + details.delta.dy).clamp(
+              topPadding,
+              screenSize.height - _buttonSize - bottomPadding,
+            );
             _position = Offset(newX, newY);
           });
         },
+        onPanEnd: (_) => _snapToNearestEdge(screenSize),
+        onPanCancel: () => _snapToNearestEdge(screenSize),
         onTap: () => _openBotChat(context),
         child: Material(
           color: Colors.transparent,
@@ -370,16 +519,23 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
             children: [
               // رأس النافذة
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xFF0A1D56), Color(0xFF0F2C7E), Color(0xFF0D7C66)],
+                    colors: [
+                      Color(0xFF0A1D56),
+                      Color(0xFF0F2C7E),
+                      Color(0xFF0D7C66)
+                    ],
                   ),
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+                  borderRadius:
+                      BorderRadius.vertical(top: Radius.circular(22)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.smart_toy_rounded, color: Color(0xFFFEF08A), size: 26),
+                    const Icon(Icons.smart_toy_rounded,
+                        color: Color(0xFFFEF08A), size: 26),
                     const SizedBox(width: 10),
                     const Expanded(
                       child: Text(
@@ -408,8 +564,9 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                   itemBuilder: (context, index) {
                     final msg = _messages[index];
                     return Column(
-                      crossAxisAlignment:
-                          msg.isUser ? CrossAxisAlignment.start : CrossAxisAlignment.end,
+                      crossAxisAlignment: msg.isUser
+                          ? CrossAxisAlignment.start
+                          : CrossAxisAlignment.end,
                       children: [
                         Container(
                           margin: const EdgeInsets.symmetric(vertical: 5),
@@ -418,7 +575,9 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                             maxWidth: MediaQuery.of(context).size.width * 0.82,
                           ),
                           decoration: BoxDecoration(
-                            color: msg.isUser ? const Color(0xFF0F2C7E) : Colors.white,
+                            color: msg.isUser
+                                ? const Color(0xFF0F2C7E)
+                                : Colors.white,
                             borderRadius: BorderRadius.circular(14),
                             boxShadow: const [
                               BoxShadow(
@@ -431,7 +590,9 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                           child: Text(
                             msg.text,
                             style: TextStyle(
-                              color: msg.isUser ? Colors.white : const Color(0xFF1E293B),
+                              color: msg.isUser
+                                  ? Colors.white
+                                  : const Color(0xFF1E293B),
                               fontSize: 14,
                               height: 1.5,
                             ),
@@ -496,7 +657,8 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                     CircleAvatar(
                       backgroundColor: const Color(0xFF0D7C66),
                       child: IconButton(
-                        icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
+                        icon: const Icon(Icons.send_rounded,
+                            color: Colors.white, size: 20),
                         onPressed: () => _sendMessage(_controller.text),
                       ),
                     ),
