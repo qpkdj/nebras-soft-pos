@@ -316,7 +316,8 @@ class NebrasSmartBotEngine {
 
 /// زر البوت العائم المتحرك بالسحب مع الالتصاق التلقائي بأقرب حافة
 class FloatingDraggableBotButton extends StatefulWidget {
-  const FloatingDraggableBotButton({super.key});
+  final GlobalKey<NavigatorState>? navigatorKey;
+  const FloatingDraggableBotButton({super.key, this.navigatorKey});
 
   @override
   State<FloatingDraggableBotButton> createState() =>
@@ -332,8 +333,9 @@ class _FloatingDraggableBotButtonState
   bool _isDragging = false;
 
   void _openBotChat(BuildContext context) {
+    final navContext = widget.navigatorKey?.currentContext ?? context;
     showModalBottomSheet(
-      context: context,
+      context: navContext,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => const _NebrasBotChatSheet(),
