@@ -104,15 +104,48 @@ jobs:
       - name: تحميل المكتبات
         run: flutter pub get
 
-      - name: تركيب أيقونة التطبيق المخصصة من assets/logo.png
+      - name: البحث التلقائي عن الأيقونة في مجلد assets وتركيبها
         run: |
-          if [ -f "assets/logo.png" ]; then
-            rm -rf android/app/src/main/res/mipmap-anydpi-v26
-            dart run flutter_launcher_icons
-          else
-            echo "خطأ: لم يتم العثور على الصورة في المسار assets/logo.png"
-            exit 1
-          fi
+          python3 - << 'EOF'
+          import os, shutil, subprocess
+
+          os.makedirs("assets", exist_ok=True)
+          valid_exts = (".png", ".jpg", ".jpeg", ".webp")
+          found = None
+
+          for root, _, files in os.walk("assets"):
+              for f in sorted(files):
+                  if f.lower().endswith(valid_exts):
+                      found = os.path.join(root, f)
+                      break
+              if found:
+                  break
+
+          if not found:
+              print("خطأ: لم يتم العثور على أي صورة داخل مجلد assets!")
+              print("الملفات الموجودة حالياً في assets:", os.listdir("assets"))
+              raise SystemExit(1)
+
+          print("تم العثور على الأيقونة:", found)
+          target = "assets/logo.png"
+
+          try:
+              try:
+                  from PIL import Image
+              except ImportError:
+                  subprocess.run(["pip", "install", "-q", "Pillow"], check=False)
+                  from PIL import Image
+
+              img = Image.open(found).convert("RGBA")
+              img.save(target, format="PNG")
+              print("تم تجهيز الصورة بنجاح في:", target)
+          except Exception as e:
+              print("تعذر التحويل عبر Pillow، سيتم النسخ المباشر:", e)
+              if os.path.abspath(found) != os.path.abspath(target):
+                  shutil.copyfile(found, target)
+          EOF
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
+          dart run flutter_launcher_icons
 
       - name: تحديث توافق مكتبة file_picker مع Android API 36
         run: |
