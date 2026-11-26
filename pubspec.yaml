@@ -1,5 +1,5 @@
 name: nebras_soft_pos
-description: Nebras SofT Pos - النظام المحاسبي ونقاط البيع
+description: نظام نبراس SofT المحاسبي المتكامل لنقاط البيع وإدارة المخزون.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -23,18 +23,19 @@ dependencies:
   share_plus: ^10.1.2
   speech_to_text: ^7.0.0
   url_launcher: ^6.3.1
+  cryptography: ^2.7.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-  flutter_launcher_icons: ^0.14.3
+  flutter_launcher_icons: ^0.14.4
 
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/logo.png"
-  adaptive_icon_background: "#143B96"
+  adaptive_icon_background: "#0D2A7A"
   adaptive_icon_foreground: "assets/logo.png"
 
 flutter:
