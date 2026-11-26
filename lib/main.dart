@@ -46,6 +46,8 @@ class NebrasPosApp extends StatefulWidget {
 }
 
 class _NebrasPosAppState extends State<NebrasPosApp> {
+  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+
   @override
   void initState() {
     super.initState();
@@ -57,6 +59,7 @@ class _NebrasPosAppState extends State<NebrasPosApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navKey,
       title: 'Nebras SofT Pos',
       debugShowCheckedModeBanner: false,
       locale: const Locale('ar', 'YE'),
@@ -80,12 +83,15 @@ class _NebrasPosAppState extends State<NebrasPosApp> {
           elevation: 0.5,
         ),
       ),
-      home: const Stack(
-        children: [
-          AppStartupGateScreen(),
-          FloatingDraggableBotButton(),
-        ],
-      ),
+      builder: (context, child) {
+        return Stack(
+          children: [
+            if (child != null) child,
+            FloatingDraggableBotButton(navigatorKey: _navKey),
+          ],
+        );
+      },
+      home: const AppStartupGateScreen(),
     );
   }
 }
