@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10394,7 +10395,8 @@ const List<_CountryDialCode> _kSupportedCountries = [
 ];
 
 class LicenseActivationService {
-  static const String _secretSalt = 'NEBRAS_SOFT_POS_2026_ABU_NEBRAS';
+  // الصق هنا المفتاح العام (Public Key) المنسوخ من تطبيق المطور
+  static const String _publicKeyBase64 = 'PUT_YOUR_PUBLIC_KEY_BASE64_HERE';
 
   static Future<String> getOrCreateDeviceId() async {
     final settings = await DatabaseHelper.instance.getSettingsMap();
@@ -10423,20 +10425,47 @@ class LicenseActivationService {
     return deviceId;
   }
 
-  static String computeExpectedKey(String deviceId) {
-    final cleanId = deviceId.trim().toUpperCase();
-    final combined = '$cleanId|$_secretSalt';
-    int h1 = 0x811C9DC5;
-    int h2 = 0x1545B5;
-    for (final c in combined.codeUnits) {
-      h1 ^= c;
-      h1 = (h1 * 0x01000193) & 0xFFFFFFFF;
-      h2 = ((h2 << 5) - h2 + c) & 0x7FFFFFFF;
+  static Future<bool> verifySerial(String deviceId, String inputSerial) async {
+    try {
+      if (_publicKeyBase64 == 'PUT_YOUR_PUBLIC_KEY_BASE64_HERE') return false;
+
+      final clean = inputSerial.trim().replaceAll(RegExp(r'\s+'), '');
+      if (!clean.toUpperCase().startsWith('NSACT-')) return false;
+
+      // الصيغة: NSACT-YYYYMMDD-Signature
+      final rest = clean.substring(6);
+      final firstDash = rest.indexOf('-');
+      if (firstDash != 8) return false;
+
+      final expiryYmd = rest.substring(0, 8);
+      final sigPart = rest.substring(9);
+      if (sigPart.isEmpty) return false;
+
+      // التحقق من تاريخ الانتهاء (00000000 يعني ترخيص دائم)
+      if (expiryYmd != '00000000') {
+        final year = int.tryParse(expiryYmd.substring(0, 4));
+        final month = int.tryParse(expiryYmd.substring(4, 6));
+        final day = int.tryParse(expiryYmd.substring(6, 8));
+        if (year == null || month == null || day == null) return false;
+        final expiryDate = DateTime(year, month, day, 23, 59, 59);
+        if (DateTime.now().isAfter(expiryDate)) return false;
+      }
+
+      final sigBytes = base64Url.decode(base64Url.normalize(sigPart));
+      if (sigBytes.length != 64) return false;
+
+      final pubKeyBytes = base64Decode(_publicKeyBase64.trim());
+      if (pubKeyBytes.length != 32) return false;
+
+      final algorithm = Ed25519();
+      final publicKey = SimplePublicKey(pubKeyBytes, type: KeyPairType.ed25519);
+      final signature = Signature(sigBytes, publicKey: publicKey);
+      final payload = '${deviceId.trim().toUpperCase()}|$expiryYmd';
+
+      return await algorithm.verify(utf8.encode(payload), signature: signature);
+    } catch (_) {
+      return false;
     }
-    final part1 = (h1 & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
-    final part2 = (h2 & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
-    final part3 = ((h1 >> 16) & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
-    return '$part1-$part2-$part3';
   }
 
   static Future<bool> isActivated() async {
@@ -10444,16 +10473,17 @@ class LicenseActivationService {
     final flag = (settings['is_app_activated'] ?? '').trim();
     if (flag != '1') return false;
     final deviceId = await getOrCreateDeviceId();
-    final savedKey = (settings['activation_key'] ?? '').trim().toUpperCase();
-    return savedKey == computeExpectedKey(deviceId);
+    final savedKey = (settings['activation_key'] ?? '').trim();
+    if (savedKey.isEmpty) return false;
+    return await verifySerial(deviceId, savedKey);
   }
 
   static Future<bool> activateWithKey(String inputKey) async {
     final deviceId = await getOrCreateDeviceId();
-    final expected = computeExpectedKey(deviceId);
-    final normalizedInput = inputKey.trim().toUpperCase();
-    if (normalizedInput == expected) {
-      await DatabaseHelper.instance.saveSetting('activation_key', normalizedInput);
+    final cleanKey = inputKey.trim();
+    final isValid = await verifySerial(deviceId, cleanKey);
+    if (isValid) {
+      await DatabaseHelper.instance.saveSetting('activation_key', cleanKey);
       await DatabaseHelper.instance.saveSetting('is_app_activated', '1');
       return true;
     }
