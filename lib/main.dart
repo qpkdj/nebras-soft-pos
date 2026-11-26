@@ -78,7 +78,7 @@ class _NebrasPosAppState extends State<NebrasPosApp> {
           elevation: 0.5,
         ),
       ),
-      home: const HomeDashboardScreen(),
+      home: const AppStartupGateScreen(),
     );
   }
 }
@@ -10340,6 +10340,442 @@ class _NebrasBotChatScreenState extends State<NebrasBotChatScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+// =============================================================================
+// بوابة تسجيل الدخول وتنشيط البرنامج (AppStartupGateScreen & ActivationLoginScreen)
+// =============================================================================
+
+class LicenseActivationService {
+  static const String _secretSalt = 'NEBRAS_SOFT_POS_2026_ABU_NEBRAS';
+
+  static Future<String> getOrCreateDeviceId() async {
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    final existing = (settings['device_hardware_id'] ?? '').trim();
+    if (existing.isNotEmpty) return existing;
+
+    final raw =
+        '${Platform.operatingSystem}_${Platform.localHostname}_${DateTime.now().microsecondsSinceEpoch}';
+    int hash = 5381;
+    for (final unit in raw.codeUnits) {
+      hash = ((hash << 5) + hash + unit) & 0x7FFFFFFF;
+    }
+    final hexPart = hash.toRadixString(16).toUpperCase().padLeft(8, '0');
+    final deviceId = 'NS-${hexPart.substring(0, 4)}-${hexPart.substring(4, 8)}';
+    await DatabaseHelper.instance.saveSetting('device_hardware_id', deviceId);
+    return deviceId;
+  }
+
+  static String computeExpectedKey(String deviceId) {
+    final cleanId = deviceId.trim().toUpperCase();
+    final combined = '$cleanId|$_secretSalt';
+    int h1 = 0x811C9DC5;
+    int h2 = 0x1545B5;
+    for (final c in combined.codeUnits) {
+      h1 ^= c;
+      h1 = (h1 * 0x01000193) & 0xFFFFFFFF;
+      h2 = ((h2 << 5) - h2 + c) & 0x7FFFFFFF;
+    }
+    final part1 = (h1 & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
+    final part2 = (h2 & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
+    final part3 = ((h1 >> 16) & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
+    return '$part1-$part2-$part3';
+  }
+
+  static Future<bool> isActivated() async {
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    final flag = (settings['is_app_activated'] ?? '').trim();
+    if (flag != '1') return false;
+    final deviceId = await getOrCreateDeviceId();
+    final savedKey = (settings['activation_key'] ?? '').trim().toUpperCase();
+    return savedKey == computeExpectedKey(deviceId);
+  }
+
+  static Future<bool> activateWithKey(String inputKey) async {
+    final deviceId = await getOrCreateDeviceId();
+    final expected = computeExpectedKey(deviceId);
+    final normalizedInput = inputKey.trim().toUpperCase();
+    if (normalizedInput == expected) {
+      await DatabaseHelper.instance.saveSetting('activation_key', normalizedInput);
+      await DatabaseHelper.instance.saveSetting('is_app_activated', '1');
+      return true;
+    }
+    return false;
+  }
+}
+
+class AppStartupGateScreen extends StatefulWidget {
+  const AppStartupGateScreen({super.key});
+
+  @override
+  State<AppStartupGateScreen> createState() => _AppStartupGateScreenState();
+}
+
+class _AppStartupGateScreenState extends State<AppStartupGateScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _checkRoute();
+  }
+
+  Future<void> _checkRoute() async {
+    final active = await LicenseActivationService.isActivated();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => active ? const HomeDashboardScreen() : const ActivationLoginScreen(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Color(0xFF1545B5),
+      body: Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      ),
+    );
+  }
+}
+
+class ActivationLoginScreen extends StatefulWidget {
+  const ActivationLoginScreen({super.key});
+
+  @override
+  State<ActivationLoginScreen> createState() => _ActivationLoginScreenState();
+}
+
+class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
+  final TextEditingController _userNameCtrl = TextEditingController();
+  final TextEditingController _phoneCtrl = TextEditingController();
+  final TextEditingController _keyCtrl = TextEditingController();
+  String _deviceId = '...';
+  bool _activating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initDeviceInfo();
+  }
+
+  @override
+  void dispose() {
+    _userNameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _keyCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _initDeviceInfo() async {
+    final id = await LicenseActivationService.getOrCreateDeviceId();
+    final settings = await DatabaseHelper.instance.getSettingsMap();
+    if (!mounted) return;
+    setState(() {
+      _deviceId = id;
+      final store = (settings['store_name'] ?? '').trim();
+      if (store.isNotEmpty && store != 'نبراس SofT') {
+        _userNameCtrl.text = store;
+      }
+      final phone = (settings['store_phone'] ?? '').trim();
+      if (phone.isNotEmpty) {
+        _phoneCtrl.text = phone;
+      }
+    });
+  }
+
+  Future<void> _submitActivation() async {
+    final name = _userNameCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    final key = _keyCtrl.text.trim();
+
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يرجى إدخال اسمك أو اسم المتجر أولاً')),
+      );
+      return;
+    }
+
+    if (phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يرجى إدخال رقم الهاتف أولاً')),
+      );
+      return;
+    }
+
+    if (key.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('يرجى إدخال سريال التنشيط أولاً')),
+      );
+      return;
+    }
+
+    setState(() => _activating = true);
+    final ok = await LicenseActivationService.activateWithKey(key);
+    if (!mounted) return;
+    setState(() => _activating = false);
+
+    if (ok) {
+      await DatabaseHelper.instance.saveSetting('store_name', name);
+      await DatabaseHelper.instance.saveSetting('store_phone', phone);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const HomeDashboardScreen()),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFDC2626),
+          content: Text('سريال التنشيط غير صحيح لمعرّف الجهاز هذا، تواصل مع المطور أبو نبراس'),
+        ),
+      );
+    }
+  }
+
+  String _buildActivationRequestMessage() {
+    final name = _userNameCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    return 'السلام عليكم أستاذ أحمد البدوي (أبو نبراس)، أرغب بتوليد سريال تنشيط لتطبيق Nebras SofT Pos.\n'
+        '• الاسم: ${name.isNotEmpty ? name : 'غير محدد'}\n'
+        '• رقم الهاتف: ${phone.isNotEmpty ? phone : 'غير محدد'}\n'
+        '• معرّف الجهاز: $_deviceId';
+  }
+
+  Future<void> _sendDeviceIdToDeveloperWhatsApp() async {
+    final name = _userNameCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    if (name.isEmpty || phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('يرجى كتابة الاسم ورقم الهاتف أولاً لإرسالهما مع معرّف الجهاز'),
+        ),
+      );
+      return;
+    }
+
+    final text = Uri.encodeComponent(_buildActivationRequestMessage());
+    final waUri = Uri.parse('whatsapp://send?phone=967735114406&text=$text');
+    final webUri = Uri.parse('https://api.whatsapp.com/send?phone=967735114406&text=$text');
+    try {
+      if (!await launchUrl(waUri, mode: LaunchMode.externalApplication)) {
+        await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _sendDeviceIdToDeveloperTelegram() async {
+    final fullMsg = _buildActivationRequestMessage();
+    await Clipboard.setData(ClipboardData(text: fullMsg));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم نسخ الاسم ورقم الهاتف ومعرّف الجهاز — الصق الرسالة في محادثة المطور'),
+        ),
+      );
+    }
+    final uri = Uri.parse('https://t.me/softnebras');
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF3F4F6),
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(18),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1545B5),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: const Icon(
+                          Icons.verified_user_rounded,
+                          color: Colors.white,
+                          size: 40,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Nebras SofT Pos',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1545B5),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'تسجيل الدخول وتنشيط نسخة البرنامج',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14, color: Colors.black54),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // مربع معرّف الجهاز
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFBFDBFE)),
+                      ),
+                      child: Column(
+                        children: [
+                          const Text(
+                            'معرّف الجهاز الخاص بك:',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1E3A8A),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SelectableText(
+                                _deviceId,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.2,
+                                  color: Color(0xFF0F172A),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                tooltip: 'نسخ معرّف الجهاز',
+                                icon: const Icon(Icons.copy, size: 20, color: Color(0xFF1545B5)),
+                                onPressed: () {
+                                  Clipboard.setData(ClipboardData(text: _deviceId));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('تم نسخ معرّف الجهاز')),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    TextField(
+                      controller: _userNameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'الاسم الكامل / اسم المتجر *',
+                        prefixIcon: Icon(Icons.person_outline),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    TextField(
+                      controller: _phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'رقم الهاتف *',
+                        prefixIcon: Icon(Icons.phone_android_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    TextField(
+                      controller: _keyCtrl,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.1,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'سريال التنشيط (XXXX-XXXX-XXXX)',
+                        prefixIcon: Icon(Icons.vpn_key_outlined),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF16A34A),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                      ),
+                      onPressed: _activating ? null : _submitActivation,
+                      icon: const Icon(Icons.check_circle_outline),
+                      label: Text(
+                        _activating ? 'جاري التحقق...' : 'تنشيط ودخول البرنامج',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Divider(),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'أدخل اسمك ورقم هاتفك ثم اضغط على واتساب لإرسال بياناتك ومعرّف الجهاز للمطور م. أحمد البدوي (أبو نبراس) لتوليد سريال التنشيط:',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12.5, color: Colors.black54, height: 1.4),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF16A34A),
+                            ),
+                            onPressed: _sendDeviceIdToDeveloperWhatsApp,
+                            icon: const Icon(Icons.chat_outlined, size: 18),
+                            label: const Text('إرسال عبر واتساب'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _sendDeviceIdToDeveloperTelegram,
+                            icon: const Icon(Icons.send_outlined, color: Color(0xFF0284C7), size: 18),
+                            label: const Text('تيليجرام'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
