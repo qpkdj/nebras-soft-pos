@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'nebras_bot.dart';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
