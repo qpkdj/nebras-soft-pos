@@ -10396,7 +10396,7 @@ const List<_CountryDialCode> _kSupportedCountries = [
 
 class LicenseActivationService {
   // الصق هنا المفتاح العام (Public Key) المنسوخ من تطبيق المطور
-  static const String _publicKeyBase64 = 'PUT_YOUR_PUBLIC_KEY_BASE64_HERE';
+  static const String _publicKeyBase64 = 'X8jSVCQEgtRmLiSW6M/F3vmTN233FDo8aIZB7uqOqYI=';
 
   static Future<String> getOrCreateDeviceId() async {
     final settings = await DatabaseHelper.instance.getSettingsMap();
