@@ -104,13 +104,46 @@ jobs:
       - name: تحميل المكتبات
         run: flutter pub get
 
-      - name: تركيب أيقونة التطبيق المخصصة وتثبيتها
+      - name: تجهيز وتركيب أيقونة التطبيق المخصصة (NS sofT POS)
         run: |
+          python3 - << 'EOF'
+          import os, glob, subprocess
+
+          os.makedirs("assets", exist_ok=True)
+          candidates = [
+              "assets/logo.png",
+              "assets/app_icon.png.jpg",
+              "assets/app_icon.png",
+              "assets/app_icon.jpg",
+              "app_icon.png.jpg",
+              "app_icon.png",
+              "app_icon.jpg",
+              "logo.png",
+              "logo.jpg",
+          ] + glob.glob("assets/*")
+
+          found = None
+          for c in candidates:
+              if os.path.isfile(c) and c.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                  found = c
+                  break
+
+          if found:
+              print("Found custom icon file:", found)
+              try:
+                  from PIL import Image
+              except ImportError:
+                  subprocess.run(["pip", "install", "-q", "Pillow"], check=False)
+                  from PIL import Image
+              img = Image.open(found).convert("RGBA").resize((1024, 1024))
+              img.save("assets/logo.png", format="PNG")
+              print("Converted and saved clean PNG to assets/logo.png")
+          else:
+              print("No custom icon image found in repository.")
+          EOF
           if [ -f "assets/logo.png" ]; then
             rm -rf android/app/src/main/res/mipmap-anydpi-v26
             dart run flutter_launcher_icons
-          else
-            echo "تنبيه: الملف assets/logo.png غير موجود في المستودع"
           fi
 
       - name: تحديث توافق مكتبة file_picker مع Android API 36
