@@ -104,12 +104,13 @@ jobs:
       - name: تحميل المكتبات
         run: flutter pub get
 
-      - name: تركيب أيقونة التطبيق المخصصة
+      - name: تركيب أيقونة التطبيق المخصصة وتثبيتها
         run: |
           if [ -f "assets/logo.png" ]; then
+            rm -rf android/app/src/main/res/mipmap-anydpi-v26
             dart run flutter_launcher_icons
           else
-            echo "لم يتم العثور على assets/logo.png - سيتم استخدام الأيقونة الافتراضية"
+            echo "تنبيه: الملف assets/logo.png غير موجود في المستودع"
           fi
 
       - name: تحديث توافق مكتبة file_picker مع Android API 36
