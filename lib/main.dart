@@ -29,6 +29,8 @@ typedef StrMap = Map<String, String>;
 typedef NumMap = Map<String, double>;
 typedef StrMatrix = List<List<String>>;
 
+final ValueNotifier<bool> nebrasBotVisible = ValueNotifier<bool>(false);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([
@@ -37,7 +39,7 @@ Future<void> main() async {
   ]);
   runApp(const NebrasPosApp());
 }
-  final ValueNotifier<bool> nebrasBotVisible = ValueNotifier<bool>(false);
+
 class NebrasPosApp extends StatefulWidget {
   const NebrasPosApp({super.key});
 
@@ -87,7 +89,13 @@ class _NebrasPosAppState extends State<NebrasPosApp> {
         return Stack(
           children: [
             if (child != null) child,
-            FloatingDraggableBotButton(navigatorKey: _navKey),
+            ValueListenableBuilder<bool>(
+              valueListenable: nebrasBotVisible,
+              builder: (_, isVisible, __) {
+                if (!isVisible) return const SizedBox.shrink();
+                return FloatingDraggableBotButton(navigatorKey: _navKey);
+              },
+            ),
           ],
         );
       },
