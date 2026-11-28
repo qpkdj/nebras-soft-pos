@@ -1416,7 +1416,7 @@ class ThermalPrintService {
   }
 }
 // =============================================================================
-// القسم (4 من 10): الواجهة الرئيسية للتطبيق (HomeDashboardScreen) مع أيقونة الروبوت
+// القسم (4 من 10): الواجهة الرئيسية للتطبيق (HomeDashboardScreen)
 // =============================================================================
 
 class HomeDashboardScreen extends StatefulWidget {
@@ -1700,18 +1700,6 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                         ],
                       ),
                     ),
-                    // أيقونة شخصية الروبوت لفتح بوت المساعد الذكي
-                    InkWell(
-                      onTap: () => _openScreen(const NebrasBotChatScreen()),
-                      borderRadius: BorderRadius.circular(22),
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 4),
-                        child: Tooltip(
-                          message: 'مساعد نبراس الذكي',
-                          child: NebrasRobotAvatar(size: 38),
-                        ),
-                      ),
-                    ),
                     IconButton(
                       tooltip: 'تحديث البيانات',
                       onPressed: _loadDashboardData,
@@ -1820,14 +1808,6 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                       icon: Icons.backup_rounded,
                       color: const Color(0xFF4B5563),
                       onTap: () => _openScreen(const BackupAndSettingsScreen()),
-                    ),
-                    _buildModuleTile(
-                      title: 'المساعد الذكي',
-                      subtitle: 'شرح النظام والدعم الفني',
-                      icon: Icons.smart_toy_rounded,
-                      color: const Color(0xFF0284C7),
-                      customIconWidget: const NebrasRobotAvatar(size: 52),
-                      onTap: () => _openScreen(const NebrasBotChatScreen()),
                     ),
                   ],
                 ),
