@@ -1432,6 +1432,7 @@ class HomeDashboardScreen extends StatefulWidget {
 
   @override
   State<HomeDashboardScreen> createState() => _HomeDashboardScreenState();
+}
 
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   String _storeName = 'نبراس SofT';
@@ -1445,6 +1446,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    nebrasBotVisible.value = true;
     _loadDashboardData();
   }
 
@@ -7980,7 +7982,7 @@ class _ContactsScreenState extends State<ContactsScreen>
                       ),
                       Text(
                         '${isCustomerTab ? 'إجمالي ديون العملاء' : 'إجمالي مستحقات الموردين'}: '
-                        '${totalDebt.toStringAsFixed(2)} $_currencySymbol',
+                        '${totalDebt.toStringAsFixed(2)}$_currencySymbol',
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 12.5,
@@ -8044,7 +8046,7 @@ class _ContactsScreenState extends State<ContactsScreen>
                                       ),
                                     const SizedBox(height: 3),
                                     Text(
-                                      'الرصيد: ${bal.toStringAsFixed(2)} $_currencySymbol',
+                                      'الرصيد: ${bal.toStringAsFixed(2)}$_currencySymbol',
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 13,
@@ -8346,7 +8348,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          '${_cashBalance.toStringAsFixed(2)} $_currencySymbol',
+                          '${_cashBalance.toStringAsFixed(2)}$_currencySymbol',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 22,
@@ -8472,7 +8474,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 trailing: Text(
-                                  '${isIn ? '+' : '-'}${amt.toStringAsFixed(2)} $_currencySymbol',
+                                  '${isIn ? '+' : '-'}${amt.toStringAsFixed(2)}$_currencySymbol',
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 14,
@@ -8491,7 +8493,7 @@ class _CashboxScreenState extends State<CashboxScreen> {
   }
 }
 // =============================================================================
-// القسم (10 من 10): التقارير والأرباح + النسخ الاحتياطي + المساعد الذكي (الروبوت)
+// القسم (10 من 10): التقارير والأرباح + النسخ الاحتياطي + التفعيل والترخيص
 // =============================================================================
 
 class ReportsScreen extends StatefulWidget {
@@ -8638,6 +8640,24 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ''');
     }
 
+    final topSectionHtml = _topProducts.isNotEmpty
+        ? '''
+      <h3 style="margin-top:18px;">الأصناف الأكثر مبيعاً</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>الصنف</th>
+            <th>الكمية المباعة</th>
+            <th>إجمالي المبيعات</th>
+            <th>الربح</th>
+          </tr>
+        </thead>
+        <tbody>$topHtml</tbody>
+      </table>
+      '''
+        : '';
+
     final html = '''
     <!DOCTYPE html>
     <html dir="rtl" lang="ar">
@@ -8669,21 +8689,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         </tbody>
       </table>
 
-      ${_topProducts.isNotEmpty ? '''
-      <h3 style="margin-top:18px;">الأصناف الأكثر مبيعاً</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>الصنف</th>
-            <th>الكمية المباعة</th>
-            <th>إجمالي المبيعات</th>
-            <th>الربح</th>
-          </tr>
-        </thead>
-        <tbody>$topHtml</tbody>
-      </table>
-      ''' : ''}
+      $topSectionHtml
     </body>
     </html>
     ''';
@@ -9852,6 +9858,7 @@ class _AppStartupGateScreenState extends State<AppStartupGateScreen> {
   @override
   void initState() {
     super.initState();
+    nebrasBotVisible.value = false;
     _checkRoute();
   }
 
@@ -9897,6 +9904,7 @@ class _WelcomeSplashScreenState extends State<WelcomeSplashScreen>
   @override
   void initState() {
     super.initState();
+    nebrasBotVisible.value = false;
     _animCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -10031,6 +10039,7 @@ class _ActivationLoginScreenState extends State<ActivationLoginScreen> {
   @override
   void initState() {
     super.initState();
+    nebrasBotVisible.value = false;
     _initDeviceInfo();
   }
 
