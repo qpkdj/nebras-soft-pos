@@ -37,7 +37,7 @@ Future<void> main() async {
   ]);
   runApp(const NebrasPosApp());
 }
-
+  final ValueNotifier<bool> nebrasBotVisible = ValueNotifier<bool>(false);
 class NebrasPosApp extends StatefulWidget {
   const NebrasPosApp({super.key});
 
