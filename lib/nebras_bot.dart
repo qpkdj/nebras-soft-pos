@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 class BotReply {
   final String text;
   final List<String> suggestions;
+  final bool showDeveloperActions;
 
   const BotReply({
     required this.text,
     this.suggestions = const [],
+    this.showDeveloperActions = false,
   });
 }
 
@@ -15,12 +19,14 @@ class _BotIntent {
   final List<String> keywords;
   final String answer;
   final List<String> followUps;
+  final bool showDeveloperActions;
 
   const _BotIntent({
     required this.id,
     required this.keywords,
     required this.answer,
     this.followUps = const [],
+    this.showDeveloperActions = false,
   });
 }
 
@@ -65,7 +71,7 @@ class NebrasSmartBotEngine {
         'كيف أبدأ البيع؟',
         'إضافة منتج وباركود',
         'إعداد الطابعة الحرارية',
-        'النسخ الاحتياطي'
+        'مراسلة المطور'
       ],
     ),
     _BotIntent(
@@ -159,7 +165,7 @@ class NebrasSmartBotEngine {
           '2. قم بإقران الطابعة أولاً من إعدادات البلوتوث في الهاتف (الرمز الافتراضي غالباً 0000 أو 1234).\n'
           '3. افتح إعدادات الطباعة داخل التطبيق واختر الطابعة ومقاس الورق (58mm أو 80mm).\n'
           '4. إذا ظهرت حروف عربية مقطّعة: تأكد من تفعيل خيار "الطباعة كصورة (Image Mode)" من إعدادات الطباعة لضمان ظهور الخط العربي والشعار بوضوح تام.',
-      followUps: ['كيف أبدأ البيع؟', 'التواصل مع الدعم الفني'],
+      followUps: ['كيف أبدأ البيع؟', 'مراسلة المطور'],
     ),
     _BotIntent(
       id: 'backup_restore',
@@ -179,11 +185,7 @@ class NebrasSmartBotEngine {
           '• النسخ المحلي: من قسم "النسخ الاحتياطي"، اضغط "إنشاء نسخة احتياطية" لحفظ قاعدة البيانات كاملة في ذاكرة الجهاز.\n'
           '• المشاركة الآمنة: ننصح يومياً بعد إغلاق المحل بمشاركة ملف النسخة الاحتياطية إلى حسابك الشخصي في واتساب أو تيليجرام أو Google Drive.\n'
           '• استعادة البيانات: عند تغيير الهاتف أو الفرمتة، ثبّت التطبيق واختر "استعادة نسخة احتياطية" وحدد آخر ملف قمت بحفظه لتعود جميع الأصناف والديون والفواتير كما كانت.',
-      followUps: [
-        'التفعيل والسريال',
-        'التقارير والأرباح',
-        'التواصل مع الدعم الفني'
-      ],
+      followUps: ['التفعيل والسريال', 'التقارير والأرباح', 'مراسلة المطور'],
     ),
     _BotIntent(
       id: 'reports_profits',
@@ -226,16 +228,18 @@ class NebrasSmartBotEngine {
           '• يرتبط التفعيل ببصمة جهازك الفريدة (NSFP-...) لضمان أمان نسختك.\n'
           '• لتفعيل التطبيق أو تجديد الاشتراك:\n'
           '  1. انسخ معرّف جهازك من شاشة التفعيل.\n'
-          '  2. أرسله للمطور عبر واتساب أو تيليجرام.\n'
+          '  2. أرسله للمطور مباشرة عبر بطاقة التواصل بالأسفل.\n'
           '  3. ستستلم مفتاح التنشيط (NSACT-...)، انسخه بالكامل والصقه في خانة التفعيل.\n'
           '• تنبيه: لا تترك مسافات إضافية عند لصق السريال، وتأكد من ضبط تاريخ الهاتف بشكل صحيح.',
-      followUps: ['التواصل مع الدعم الفني', 'النسخ الاحتياطي'],
+      followUps: ['النسخ الاحتياطي', 'إعداد الطابعة الحرارية'],
+      showDeveloperActions: true,
     ),
     _BotIntent(
       id: 'support_contact',
       keywords: [
         'دعم',
         'تواصل',
+        'مراسله',
         'مطور',
         'واتساب',
         'تيليجرام',
@@ -247,15 +251,13 @@ class NebrasSmartBotEngine {
         'نبراس'
       ],
       answer: '📞 الدعم الفني والتواصل المباشر مع المطور:\n\n'
-          '• المطور: م. أبو نبراس أحمد البدوي (فريق نبراس SofT)\n'
-          '• واتساب: 735114406\n'
-          '• تيليجرام: @softnebras\n\n'
-          'عند التواصل بخصوص مشكلة تقنية، يُفضل إرسال لقطة شاشة للخطأ مع ذكر نوع الجهاز لتقديم الحل بشكل أسرع.',
+          'يسعدنا تواصلك لطلب الدعم الفني، التحديثات، أو التفعيل المباشر عبر الأزرار بالأسفل:',
       followUps: [
         'التفعيل والسريال',
         'النسخ الاحتياطي',
         'إعداد الطابعة الحرارية'
       ],
+      showDeveloperActions: true,
     ),
   ];
 
@@ -268,7 +270,7 @@ class NebrasSmartBotEngine {
           'كيف أبدأ البيع؟',
           'إضافة منتج وباركود',
           'إعداد الطابعة الحرارية',
-          'التواصل مع الدعم الفني'
+          'مراسلة المطور'
         ],
       );
     }
@@ -296,20 +298,21 @@ class NebrasSmartBotEngine {
       return BotReply(
         text: bestIntent.answer,
         suggestions: bestIntent.followUps,
+        showDeveloperActions: bestIntent.showDeveloperActions,
       );
     }
 
     return const BotReply(
       text: 'لم أتمكن من تحديد قصدك بدقة 🤔\n\n'
-          'يمكنك سؤالي عن أي موضوع يتعلق بالنظام مثل: المبيعات، المخزون، الباركود، الديون، الطباعة الحرارية، الأرباح، النسخ الاحتياطي، أو التفعيل.\n'
-          'أو اختر أحد المواضيع الجاهزة بالأسفل:',
+          'يمكنك سؤالي عن: المبيعات، المخزون، الباركود، الديون، الطباعة الحرارية، الأرباح، النسخ الاحتياطي، أو التفعيل.\n'
+          'أو يمكنك مراسلة المطور مباشرة من البطاقة بالأسفل:',
       suggestions: [
         'كيف أبدأ البيع؟',
         'حسابات العملاء والديون',
         'إعداد الطابعة الحرارية',
         'النسخ الاحتياطي',
-        'التواصل مع الدعم الفني',
       ],
+      showDeveloperActions: true,
     );
   }
 }
@@ -363,7 +366,6 @@ class _FloatingDraggableBotButtonState
     final topPadding = media.padding.top + 12;
     final bottomPadding = media.padding.bottom + 16;
 
-    // الموضع الافتراضي عند أول تشغيل (أسفل يسار الشاشة)
     _position ??= Offset(
       _edgeMargin,
       screenSize.height - _buttonSize - bottomPadding - 70,
@@ -434,11 +436,13 @@ class _ChatMessage {
   final String text;
   final bool isUser;
   final List<String> suggestions;
+  final bool showDeveloperActions;
 
   const _ChatMessage({
     required this.text,
     required this.isUser,
     this.suggestions = const [],
+    this.showDeveloperActions = false,
   });
 }
 
@@ -464,8 +468,16 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
         text: welcome.text,
         isUser: false,
         suggestions: welcome.suggestions,
+        showDeveloperActions: welcome.showDeveloperActions,
       ),
     );
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   void _sendMessage(String text) {
@@ -480,6 +492,7 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
           text: reply.text,
           isUser: false,
           suggestions: reply.suggestions,
+          showDeveloperActions: reply.showDeveloperActions,
         ),
       );
     });
@@ -494,6 +507,95 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
         );
       }
     });
+  }
+
+  Widget _buildDeveloperContactCard() {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F9FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBAE6FD)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            children: [
+              CircleAvatar(
+                radius: 17,
+                backgroundColor: Color(0xFF1545B5),
+                child: Icon(Icons.engineering, color: Colors.white, size: 19),
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'المطور: م. أحمد البدوي (أبو نبراس)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    Text(
+                      'نبراس SofT • @softnebras',
+                      style: TextStyle(fontSize: 11.5, color: Color(0xFF0369A1)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                  ),
+                  icon: const Icon(Icons.chat_rounded, size: 17),
+                  label: const Text('واتساب', style: TextStyle(fontSize: 12.5)),
+                  onPressed: () => _openUrl(
+                    'https://wa.me/967735114406?text=${Uri.encodeComponent('السلام عليكم م. أبو نبراس، أحتاج مساعدة في تطبيق Nebras SofT Pos')}',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF0284C7),
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                  ),
+                  icon: const Icon(Icons.send_rounded, size: 17),
+                  label: const Text('تيليجرام', style: TextStyle(fontSize: 12.5)),
+                  onPressed: () => _openUrl('https://t.me/softnebras'),
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton.outlined(
+                tooltip: 'نسخ @softnebras',
+                icon: const Icon(Icons.copy, size: 17),
+                onPressed: () {
+                  Clipboard.setData(const ClipboardData(text: '@softnebras'));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('تم نسخ معرف المطور: @softnebras'),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -522,7 +624,7 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
               // رأس النافذة
               Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
@@ -550,6 +652,13 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                       ),
                     ),
                     IconButton(
+                      tooltip: 'مراسلة المطور واتساب',
+                      icon: const Icon(Icons.support_agent_rounded,
+                          color: Color(0xFFFEF08A)),
+                      onPressed: () => _openUrl(
+                          'https://wa.me/967735114406?text=${Uri.encodeComponent('مرحباً م. أبو نبراس، أحتاج مساعدة في تطبيق Nebras SofT Pos')}'),
+                    ),
+                    IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
                       onPressed: () => Navigator.pop(context),
                     ),
@@ -574,7 +683,7 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                           margin: const EdgeInsets.symmetric(vertical: 5),
                           padding: const EdgeInsets.all(12),
                           constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.82,
+                            maxWidth: MediaQuery.of(context).size.width * 0.86,
                           ),
                           decoration: BoxDecoration(
                             color: msg.isUser
@@ -589,15 +698,22 @@ class _NebrasBotChatSheetState extends State<_NebrasBotChatSheet> {
                               ),
                             ],
                           ),
-                          child: Text(
-                            msg.text,
-                            style: TextStyle(
-                              color: msg.isUser
-                                  ? Colors.white
-                                  : const Color(0xFF1E293B),
-                              fontSize: 14,
-                              height: 1.5,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                msg.text,
+                                style: TextStyle(
+                                  color: msg.isUser
+                                      ? Colors.white
+                                      : const Color(0xFF1E293B),
+                                  fontSize: 14,
+                                  height: 1.5,
+                                ),
+                              ),
+                              if (!msg.isUser && msg.showDeveloperActions)
+                                _buildDeveloperContactCard(),
+                            ],
                           ),
                         ),
                         if (!msg.isUser && msg.suggestions.isNotEmpty)
