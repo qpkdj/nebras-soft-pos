@@ -1431,11 +1431,7 @@ class HomeDashboardScreen extends StatefulWidget {
   const HomeDashboardScreen({super.key});
 
   @override
-  void initState() {
-    super.initState();
-    nebrasBotVisible.value = true;
-    _loadDashboardData();
-  }
+  State<HomeDashboardScreen> createState() => _HomeDashboardScreenState();
 
 class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   String _storeName = 'نبراس SofT';
